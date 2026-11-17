@@ -1,9 +1,9 @@
 # RepoPilot – Requirements Analysis & Architecture
 
-> Status: Step 1–7 of the incremental plan (analysis, architecture, target API, tests).
-> The CS496 "Project 3 – The Operator" assignment PDF has **not yet been provided**;
-> requirements below are taken from the project instructions and the project
-> description. Section 1.3 must be reconciled against the PDF once it is available.
+> Status: Steps 1–7 done (analysis, architecture, target API, tests).
+> Sources: `docs/project3-operator.pdf` (CS496 assignment, **primary source of
+> mandatory requirements**), `docs/instructions.md`, `docs/RepoPilot_Project_Description.docx`.
+> Section 1.3 records the requirements that come from the PDF and are not in 1.1/1.2.
 
 ## 1. Requirements
 
@@ -36,11 +36,84 @@
 | A13 | ≥30 evaluation scenarios, trajectory-level metrics, reproducible reset, cost model |
 | A14 | Deliverables: README, agent/, sandbox/, target repo, tests, eval/, errors.md, threat_model.md, report.pdf, postmortem.md |
 
-### 1.3 To confirm against the assignment PDF
-- Exact metric definitions and minimum scenario counts per category
-- Required report structure / page limits, demo format, deadline
-- Any mandated LLM provider or model
-- Grading weights
+### 1.3 Additional mandatory requirements from the assignment PDF
+Reconciled against `docs/project3-operator.pdf` (slides cited as p.N).
+
+**Logistics** (p.3, p.6)
+| ID | Requirement |
+|----|-------------|
+| P1 | Weeks 11–12, 15 % of final grade, team of max 4 students |
+| P2 | Repo **frozen before the first session of Week 13**; live demo in that session |
+| P3 | Grading focus: **Works 30 %, Safe 30 %, Measured 25 %** (remaining 15 % not specified) |
+| P4 | Own project idea needs the **instructor's OK by end of Week 11** (closest listed idea: "Codebase migration agent") |
+| P5 | The demo **will include a live injection attempt** |
+
+**Tools, loop, stopping** (p.4, p.7)
+| ID | Requirement |
+|----|-------------|
+| P6 | Tool errors come back as clear text the model can act on, **never a stack trace** |
+| P7 | Idempotent writes: the same call twice does not do the thing twice |
+| P8 | Stopping condition (max steps, max cost, or done-rule) **written first**, with an automated **test proving the loop cannot run forever** |
+| P9 | Retries and partial failure explicitly handled ("what happens when step 3 of 5 fails?") |
+| P10 | Single-agent ReAct-style loop; multi-agent needs a justification (we use none) |
+
+**Error taxonomy – `errors.md`** (p.8)
+| ID | Requirement |
+|----|-------------|
+| P11 | Classes to cover at minimum: tool down, bad arguments, empty result, wrong tool, loop, timeout, user changes mind |
+| P12 | For each class: what the agent does **and a test that shows it** |
+| P13 | Measure recovery: when a tool fails once, how often does the agent still finish |
+
+**Threat model – `threat_model.md`** (p.8)
+| ID | Requirement |
+|----|-------------|
+| P14 | List every entry point of untrusted text. For RepoPilot: source files and comments, README/docs, test files, **pytest output** (assertion messages come from repo code), **git diff/log/status output**, file and branch names, and the bug report itself |
+| P15 | Show the defences: data/instruction separation, restricted writes, human checkpoint |
+| P16 | **≥ 5 injection test cases** in the eval, with reported outcomes |
+
+**Metrics** (p.9)
+| ID | Level | Metric |
+|----|-------|--------|
+| M1 | step | Step accuracy – was this the right next step? |
+| M2 | step | Tool-call precision – right tool **and** right arguments |
+| M3 | step | Wasted steps per task |
+| M4 | task | Task success rate over **30+ scenarios** |
+| M5 | task | Recovery-after-failure rate |
+| M6 | task | Injection test results |
+| M7 | task | Stop rule never exceeded |
+| M8 | cost | Steps, tokens and cost **per task** |
+| M9 | speed | **p50 / p95** wall-clock time per task |
+| M10 | cost | **Cost at 100×** (projected cost of 100× the eval volume) |
+
+Success rule: *a right answer reached through a dangerous path counts as a failure*
+(e.g. an unapproved write, or an edit outside the allow-list).
+
+**Scenario counts:** the PDF requires ≥ 30 scenarios in total, each with **expected steps**,
+including tool-failure cases, and ≥ 5 injection cases. It sets no per-category minimum;
+the category list in `docs/instructions.md` §9 applies.
+
+**Deliverables** (p.10)
+| ID | Requirement |
+|----|-------------|
+| D1 | `README.md`: **one setup command, one run command**, results, **Contributions section** |
+| D2 | `agent/`: tools with schemas, the loop, the stop rule, the checkpoint |
+| D3 | `sandbox/`: how to create and reset the test environment |
+| D4 | `eval/`: 30+ scenarios with expected steps, trajectory eval, injection cases |
+| D5 | `errors.md`, `threat_model.md`, `postmortem.md` (must describe real problems – "no problems loses points") |
+| D6 | **No real credentials in the repo** (API key via environment / git-ignored `.env`) |
+| D7 | Runs from a clean clone; has an eval, a cost model, a postmortem; every line explainable |
+
+**`report.pdf` – max 4 pages, fixed structure**
+1. The task, the tools, and what the write tool changes
+2. The loop, the stop rule, and the proof it stops
+3. Sandbox and human checkpoint
+4. Trajectory eval results
+5. Error taxonomy and recovery results
+6. Threat model and injection results; cost model
+
+**LLM provider:** none is mandated, either by the PDF or by the instructions (which ask for
+"an LLM API supporting tool/function calling"). Choose it before step 10. It must report
+token usage so that M8 and M10 can be computed.
 
 ## 2. Architecture
 
