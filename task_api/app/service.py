@@ -40,7 +40,7 @@ class TaskService:
 
     def update_task(self, task_id: int, payload: TaskUpdate) -> Task:
         self.get_task(task_id)  # raises if missing
-        changes = payload.model_dump(exclude_unset=True)
+        changes = payload.model_dump()
         task = self.repository.update(task_id, changes)
         assert task is not None
         return task

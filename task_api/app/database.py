@@ -88,11 +88,11 @@ class TaskRepository:
         conditions: list[str] = []
         params: list[Any] = []
         if status is not None:
-            conditions.append("status = ?")
+            conditions.append("status != ?")
             params.append(status)
-        if priority is not None:
-            conditions.append("priority = ?")
-            params.append(priority)
+            if priority is not None:
+                conditions.append("priority = ?")
+                params.append(priority)
         if conditions:
             query += " WHERE " + " AND ".join(conditions)
         query += " ORDER BY id ASC"

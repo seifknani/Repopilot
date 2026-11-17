@@ -24,9 +24,9 @@ class TaskPriority(str, Enum):
 
 
 def _clean_title(value: str) -> str:
-    value = value.strip()
     if not value:
         raise ValueError("title must not be blank")
+    value = value.strip()
     if len(value) > TITLE_MAX_LENGTH:
         raise ValueError(f"title must be at most {TITLE_MAX_LENGTH} characters")
     return value

@@ -49,10 +49,7 @@ def create_app(db_path: Optional[str] = None) -> FastAPI:
     def update_task(
         task_id: int, payload: TaskUpdate, service: TaskService = Depends(get_service)
     ) -> Task:
-        try:
-            return service.update_task(task_id, payload)
-        except TaskNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return service.update_task(task_id, payload)
 
     @app.delete("/tasks/{task_id}", status_code=http_status.HTTP_204_NO_CONTENT)
     def delete_task(task_id: int, service: TaskService = Depends(get_service)) -> Response:
