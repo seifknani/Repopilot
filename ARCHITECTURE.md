@@ -193,6 +193,43 @@ decision keyed on that id, so a repeated call with the same id is a no-op.
   repository text is escaped, so repository text cannot close the wrapper.
 - `approve` / `reject` live on `ApprovalStore` and are **not** tools, so the model cannot approve its own writes.
 
+### 2.2 Agent loop and stop rule (implemented in step 10)
+
+`agent/loop.py` – `Agent.start(bug_report)` → `RunResult`; `Agent.decide(proposal_id, approve, note)`;
+`Agent.stop()`.
+
+```
+while True:
+    reason = budget.before_step()            # steps, tool calls, tokens, cost, time
+    if reason: STOP(reason)
+    step = budget.begin_step()               # +1 every iteration → at most max_steps iterations
+    response = llm.complete(...)             # retried ≤ llm_max_retries, then STOP(llm_error)
+    budget.record_llm(tokens)                # may STOP(max_tokens / max_cost)
+    if no tool calls: STOP(done, final answer)
+    for each tool call:
+        budget.before_tool(name, args, repo_version)   # may STOP(max_tool_calls / loop_detected)
+        apply_edit / commit → refused (human-only)
+        else executor.call(...) → observation message
+        budget.record_tool(ok)               # 3 consecutive failures → STOP(too_many_failures)
+        propose_* pending → remaining calls this turn are skipped
+    if a proposal is pending: PAUSE (awaiting_approval) and return to the caller
+```
+
+- **Human checkpoint:** on `decide(approve=True)`, the orchestrator runs `apply_edit` or `commit` itself
+  (logged with actor `human`). After every applied edit it **automatically runs the full test suite**
+  (actor `system`), then sends the result to the model. On reject, the proposal is marked rejected
+  and the model is told why. Re-proposing the same edit returns the rejected proposal and does not pause again.
+- **Stop reasons:** `done`, `max_steps`, `max_tool_calls`, `max_tokens`, `max_cost`, `timeout`,
+  `too_many_failures`, `loop_detected`, `llm_error`, `user_stopped`. Defaults are in `Limits`.
+- **Proof it stops:** `tests/test_loop_stops.py` drives the real loop with LLMs that never finish.
+  It shows each limit is hit exactly, and it fuzzes 25 random agents (bad calls, repeats, outages)
+  to check that no counter ever exceeds its limit.
+- **Time accounting:** `elapsed_s` counts agent time only. Time spent waiting for the human, and the
+  apply/test/commit work triggered by the human's decision, are excluded from the time budget.
+- **LLM:** `agent/llm.py` defines the provider-neutral `LLMClient` protocol and the deterministic
+  `ScriptedLLM`. The scripted LLM reports *estimated* tokens (about 4 characters per token) and costs $0.
+  A real provider adapter will plug in here.
+
 ## 3. Task Management API design
 
 | Method | Path | Description | Success |

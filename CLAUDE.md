@@ -24,8 +24,8 @@ maintenance agent that investigates and fixes real bugs in our own Task Manageme
 - `task_api/` – pristine **source** of the target app (currently contains the 5 bugs)
 - `sandbox/reset.py` – copies `task_api/` → `sandbox/workspace/` (git-ignored), runs `git init`,
   makes a baseline commit on `main`, and checks out the work branch `repopilot/work`
-- `agent/` – tools, schemas, policy, approvals, executor, logging (loop comes in step 10)
-- `tests/` – tests for the agent and the sandbox (root `pytest.ini`, 76 tests, all must pass)
+- `agent/` – tools, schemas, policy, approvals, executor, logging, stop_rule, llm (ScriptedLLM), loop
+- `tests/` – tests for the agent and the sandbox (root `pytest.ini`, 143 tests, all must pass)
 - `eval/` – evaluation material (`bugs.md` now; scenarios in step 13)
 - `docs/` – assignment PDF, instructions, project description
 
@@ -51,7 +51,7 @@ summary line disappears.
 - [x] B ARCHITECTURE §1.3 reconciled with the PDF
 - [x] 8 five documented bugs (`eval/bugs.md`)
 - [x] 9 `sandbox/reset.py` + five tools with Pydantic schemas, permission checks, logging
-- [ ] 10 agent loop – **write the stop rule and its test first** (PDF p.7)
+- [x] 10 agent loop + stop rule (scripted LLM only; real provider adapter still to add)
 - [ ] 11 safety/approval hardening (tests-after-edit, injection defences)
 - [ ] 12 Streamlit UI
 - [ ] 13 eval suite (≥30 scenarios, ≥5 injection, metrics M1–M10, cost at 100×)
@@ -59,6 +59,6 @@ summary line disappears.
       threat_model.md, report.pdf (≤4 pages, fixed 6 sections), postmortem.md
 
 ## Open decisions
-- LLM provider: not chosen yet (none is mandated). Must support tool calling and report token usage.
+- LLM provider: not chosen yet; the user chose the scripted LLM for now. A real one must support tool calling and report token usage.
   `agent/llm.py` should be a thin adapter so the provider can be swapped.
 - Instructor approval of the RepoPilot idea is needed by the end of Week 11 (PDF p.6).
