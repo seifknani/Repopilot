@@ -25,7 +25,8 @@ maintenance agent that investigates and fixes real bugs in our own Task Manageme
 - `sandbox/reset.py` – copies `task_api/` → `sandbox/workspace/` (git-ignored), runs `git init`,
   makes a baseline commit on `main`, and checks out the work branch `repopilot/work`
 - `agent/` – tools, schemas, policy, approvals, executor, logging, stop_rule, llm (ScriptedLLM), loop
-- `tests/` – tests for the agent and the sandbox (root `pytest.ini`, 155 tests, all must pass)
+- `tests/` – tests for the agent and the sandbox (root `pytest.ini`, 166 tests, all must pass)
+- `ui/app.py` – Streamlit UI: process diagram, timeline, approvals, tests, git, repo browser, raw log
 - `eval/` – evaluation material (`bugs.md` now; scenarios in step 13)
 - `docs/` – assignment PDF, instructions, project description
 
@@ -34,14 +35,16 @@ maintenance agent that investigates and fixes real bugs in our own Task Manageme
 python -m venv .venv
 .venv/Scripts/python -m pip install -r requirements.txt
 .venv/Scripts/python sandbox/reset.py                 # (re)build the sandbox workspace
-.venv/Scripts/python -m pytest                        # agent + sandbox tests (root)
+.venv/Scripts/python -m pytest                        # agent + sandbox + UI tests (root)
+.venv/Scripts/python -m streamlit run ui/app.py      # UI on http://localhost:8501 (localhost only)
 cd task_api && ../.venv/Scripts/python -m pytest      # target app tests (13 fail by design)
 ```
 Note: `task_api/pytest.ini` already sets `-q`; don't add another `-q` there, or the
 summary line disappears.
 
 ## Git landmarks
-- Target repo on GitHub (remote mode): not created yet. Seed once with
+- Target repo on GitHub (remote mode): user created https://github.com/seifknani/task-management-api.git
+  but it was NOT reachable from this machine (404 / repository not found) – not seeded yet. Seed once with
   `sandbox/reset.py --seed-remote URL`, then use `--remote URL` or `REPOPILOT_TARGET_REMOTE`.
   Default mode stays local (offline, used by tests/eval). Approved fixes are pushed as
   `repopilot/fix-<sha7>` branches, never to main.
@@ -57,7 +60,7 @@ summary line disappears.
 - [x] 9 `sandbox/reset.py` + five tools with Pydantic schemas, permission checks, logging
 - [x] 10 agent loop + stop rule (scripted LLM only; real provider adapter still to add)
 - [ ] 11 safety/approval hardening (tests-after-edit, injection defences)
-- [ ] 12 Streamlit UI
+- [x] 12 Streamlit UI (`ui/app.py`, done early at the user's request; scripted demos in `agent/demo_scripts.py`)
 - [ ] 13 eval suite (≥30 scenarios, ≥5 injection, metrics M1–M10, cost at 100×)
 - [ ] 14 deliverables: README (one setup + one run command, Contributions), errors.md,
       threat_model.md, report.pdf (≤4 pages, fixed 6 sections), postmortem.md

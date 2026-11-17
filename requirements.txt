@@ -1,1 +1,2 @@
 -r task_api/requirements.txt
+streamlit>=1.50

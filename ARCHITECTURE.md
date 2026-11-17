@@ -253,3 +253,22 @@ Validation rules
 
 Layers: `main.py` (HTTP only) → `service.py` (business rules, errors) →
 `database.py` (SQLite repository) with `models.py` shared Pydantic schemas.
+
+### 2.3 Streamlit UI (`ui/app.py`)
+
+`streamlit run ui/app.py` (served on localhost only, see `.streamlit/config.toml`).
+
+- **Sidebar:** target mode (local copy / GitHub remote), *Reset sandbox*, and step and tool-call limits.
+- **Bug report:** pick one of the 5 scripted scenarios (`agent/demo_scripts.py`, decisions pre-recorded
+  until a real LLM is connected), then *Start investigation* or *Stop run*.
+- **Process diagram:** Graphviz view of the loop (plan → tool call → observe → decide → approval /
+  write / automatic tests / stop). The current stage is highlighted, visited stages are shaded, and
+  each node shows live counts.
+- **Metrics:** status, steps, tool calls, failed calls, tokens, cost and agent time, all from the stop-rule budget.
+- **Human checkpoint:** the pending diff, commit or push, with *Approve* / *Reject* and an optional note to the agent.
+- **Tabs:** Timeline (each plan, plus each tool call with its input and output), Files read, Tests
+  (agent-requested and automatic runs), Git (`git diff main`, log), Repository (file browser), and
+  Raw log (JSONL download).
+- Every view is built from the real trajectory log and the real sandbox repository.
+  `tests/test_ui.py` drives the UI headlessly with `streamlit.testing`.
+

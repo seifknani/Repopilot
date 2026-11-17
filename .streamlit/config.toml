@@ -1,0 +1,7 @@
+# The UI can approve writes and pushes: only serve it on this machine.
+[server]
+address = "localhost"
+port = 8501
+
+[browser]
+gatherUsageStats = false
