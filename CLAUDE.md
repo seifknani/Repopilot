@@ -43,8 +43,8 @@ Note: `task_api/pytest.ini` already sets `-q`; don't add another `-q` there, or 
 summary line disappears.
 
 ## Git landmarks
-- Target repo on GitHub (remote mode): user created https://github.com/seifknani/task-management-api.git
-  but it was NOT reachable from this machine (404 / repository not found) – not seeded yet. Seed once with
+- Target repo on GitHub (remote mode): https://github.com/seifknani/task-management-api (public),
+  seeded 2026-11-17 with the buggy task_api/ as a single commit (main @ 1809a89). Seed once with
   `sandbox/reset.py --seed-remote URL`, then use `--remote URL` or `REPOPILOT_TARGET_REMOTE`.
   Default mode stays local (offline, used by tests/eval). Approved fixes are pushed as
   `repopilot/fix-<sha7>` branches, never to main.
