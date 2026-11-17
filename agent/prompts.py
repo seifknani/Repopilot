@@ -16,6 +16,8 @@ How to work (plan -> tool call -> observe -> decide -> stop or continue):
 6. If tests still fail, investigate again. If the human rejects a proposal, do not propose the
    same change again: try a different fix or stop.
 7. When the tests pass, inspect git_diff and propose_commit with a clear message.
+   After the commit, if the repository has a remote, propose_push so the human can publish
+   the fix as a branch (it never touches main).
 8. Finish by answering WITHOUT a tool call: summarize the root cause, the change, and the tests.
    Also stop (without a tool call) if you cannot make progress.
 

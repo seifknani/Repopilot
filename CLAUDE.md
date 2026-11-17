@@ -25,7 +25,7 @@ maintenance agent that investigates and fixes real bugs in our own Task Manageme
 - `sandbox/reset.py` – copies `task_api/` → `sandbox/workspace/` (git-ignored), runs `git init`,
   makes a baseline commit on `main`, and checks out the work branch `repopilot/work`
 - `agent/` – tools, schemas, policy, approvals, executor, logging, stop_rule, llm (ScriptedLLM), loop
-- `tests/` – tests for the agent and the sandbox (root `pytest.ini`, 143 tests, all must pass)
+- `tests/` – tests for the agent and the sandbox (root `pytest.ini`, 155 tests, all must pass)
 - `eval/` – evaluation material (`bugs.md` now; scenarios in step 13)
 - `docs/` – assignment PDF, instructions, project description
 
@@ -41,6 +41,10 @@ Note: `task_api/pytest.ini` already sets `-q`; don't add another `-q` there, or 
 summary line disappears.
 
 ## Git landmarks
+- Target repo on GitHub (remote mode): not created yet. Seed once with
+  `sandbox/reset.py --seed-remote URL`, then use `--remote URL` or `REPOPILOT_TARGET_REMOTE`.
+  Default mode stays local (offline, used by tests/eval). Approved fixes are pushed as
+  `repopilot/fix-<sha7>` branches, never to main.
 - Remote: `origin` = https://github.com/seifknani/Repopilot (branch `main`)
 - Tag `baseline-clean` – bug-free app, 48/48 tests pass
 - Tag `bugs-v1` – app with BUG-1..BUG-5, 13 failed / 35 passed (see `eval/bugs.md`)

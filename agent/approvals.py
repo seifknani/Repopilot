@@ -59,7 +59,21 @@ class CommitProposal(BaseModel):
     commit_sha: Optional[str] = None
 
 
-Proposal = Union[EditProposal, CommitProposal]
+class PushProposal(BaseModel):
+    kind: str = "push"
+    id: str
+    remote: str  # remote URL, credentials stripped
+    remote_branch: str  # never a protected branch
+    head_sha: str
+    commits: int
+    status: ProposalStatus = ProposalStatus.PENDING
+    created_at: str = Field(default_factory=_now)
+    decided_at: Optional[str] = None
+    reviewer_note: Optional[str] = None
+    web_url: Optional[str] = None
+
+
+Proposal = Union[EditProposal, CommitProposal, PushProposal]
 
 
 class ApprovalStore:

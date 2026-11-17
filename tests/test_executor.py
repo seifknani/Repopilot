@@ -13,7 +13,7 @@ def test_five_tools_are_registered():
     assert {spec.tool for spec in TOOLS.values()} == {
         "Repository Explorer", "File Reader", "Code Editor", "Test Runner", "Git Manager",
     }
-    assert {name for name, spec in TOOLS.items() if spec.writes} == {"apply_edit", "ensure_work_branch", "commit"}
+    assert {name for name, spec in TOOLS.items() if spec.writes} == {"apply_edit", "ensure_work_branch", "commit", "push"}
 
 
 def test_tool_definitions_have_json_schemas(executor):

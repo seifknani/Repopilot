@@ -20,8 +20,8 @@ from agent.schemas import ToolResult
 from agent.stop_rule import Budget, Limits, Pricing, StopReason
 
 # Writes that only the human's decision can trigger. They are not offered to the model.
-HUMAN_ONLY_TOOLS = frozenset({"apply_edit", "commit"})
-PROPOSAL_TOOLS = {"propose_edit": "edit", "propose_commit": "commit"}
+HUMAN_ONLY_TOOLS = frozenset({"apply_edit", "commit", "push"})
+PROPOSAL_TOOLS = {"propose_edit": "edit", "propose_commit": "commit", "propose_push": "push"}
 
 
 class RunStatus(str, Enum):
@@ -35,7 +35,7 @@ class RunStatus(str, Enum):
 @dataclass
 class PendingApproval:
     proposal_id: str
-    kind: str  # "edit" | "commit"
+    kind: str  # "edit" | "commit" | "push"
     summary: str  # diff or commit details shown to the human
 
 
@@ -133,11 +133,14 @@ class Agent:
                 self.repo_version += 1
                 tests = self.executor.call("run_tests", {}, actor="system")  # tests always run after an edit
                 parts.append("Tests were run automatically after the edit:\n" + tests.to_model_text())
-        else:
+        elif pending.kind == "commit":
             committed = self.executor.call("commit", {"proposal_id": pending.proposal_id}, actor="human")
             parts.append("commit result:\n" + committed.to_model_text())
             if committed.ok and committed.data.get("changed"):
                 self.repo_version += 1
+        else:
+            pushed = self.executor.call("push", {"proposal_id": pending.proposal_id}, actor="human")
+            parts.append("push result:\n" + pushed.to_model_text())
         return "\n\n".join(parts)
 
     def _finish(self, reason: StopReason, message: str = "") -> RunResult:

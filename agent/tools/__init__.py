@@ -62,5 +62,12 @@ TOOLS: dict[str, ToolSpec] = {
         ToolSpec("commit", "Git Manager",
                  "Create the commit for an approved commit proposal. Repeating it never creates a second commit.",
                  s.CommitInput, git_manager.commit, writes=True),
+        ToolSpec("propose_push", "Git Manager",
+                 "Propose publishing the committed fix to the remote repository as a new branch "
+                 "(never main). A human must approve. Only available when the workspace has a remote.",
+                 s.ProposePushInput, git_manager.propose_push),
+        ToolSpec("push", "Git Manager",
+                 "Push an approved push proposal. Repeating it never pushes twice.",
+                 s.PushInput, git_manager.push, writes=True),
     ]
 }

@@ -104,6 +104,14 @@ class CommitInput(StrictInput):
     proposal_id: str = Field(pattern=r"^commit-[0-9a-f]{12}$", description="Id returned by propose_commit.")
 
 
+class ProposePushInput(StrictInput):
+    pass
+
+
+class PushInput(StrictInput):
+    proposal_id: str = Field(pattern=r"^push-[0-9a-f]{12}$", description="Id returned by propose_push.")
+
+
 # --- Results ---------------------------------------------------------------------------
 @dataclass
 class ToolOutput:

@@ -181,6 +181,8 @@ decision keyed on that id, so a repeated call with the same id is a no-op.
 | Git Manager | `ensure_work_branch` | checks out `repopilot/work` | the only branch switch possible |
 | Git Manager | `propose_commit` | none (creates a pending proposal) | work branch; tracked changes exist |
 | Git Manager | `commit` | creates a commit | human-approved; HEAD and diff unchanged since proposal |
+| Git Manager | `propose_push` | none (creates a pending proposal) | remote mode only; committed work beyond `origin/main` |
+| Git Manager | `push` | pushes branch `repopilot/fix-<sha7>` to `origin` | human-approved; never `main`; HEAD unchanged; no force push |
 
 - **Idempotency:** a proposal id is a hash of its content plus the repository state at proposal time.
   Proposing the same thing twice returns the existing proposal, and applying or committing twice is a no-op.

@@ -32,6 +32,11 @@ class AgentConfig:
     max_output_chars: int = 8_000
     test_timeout_s: float = 120.0
     git_timeout_s: float = 30.0
+    push_timeout_s: float = 90.0
+
+    # Publishing (only when the workspace was cloned from a remote)
+    remote_name: str = "origin"
+    push_branch_prefix: str = "repopilot/fix-"
 
     # Logging (JSONL). None = keep records in memory only.
     log_path: Optional[Path] = None

@@ -17,8 +17,28 @@ python sandbox/reset.py                     # rebuild sandbox/workspace
 python sandbox/reset.py --workspace D:/tmp/ws   # rebuild elsewhere
 ```
 
+### Remote mode (target repository on GitHub)
+
+```bash
+# one time: publish task_api/ to an EMPTY repository (single commit, no project history)
+python sandbox/reset.py --seed-remote https://github.com/<user>/<repo>.git
+
+# every run: clone it into the sandbox instead of copying task_api/
+export REPOPILOT_TARGET_REMOTE=https://github.com/<user>/<repo>.git   # or: --remote URL
+python sandbox/reset.py
+```
+
+In remote mode, `origin` points to the target repository. After the human approves a commit,
+the agent can **propose a push**. With a further approval, the fix is published as a new
+branch `repopilot/fix-<commit>`, and the result includes a "compare / open pull request" link.
+`main` on the remote is never pushed to. Authentication uses your own Git credential manager,
+so no token is stored in this repository. Only the buggy code is published (no history, no tags),
+so the agent cannot recover the fix or the answer key from the target repository.
+
+### What a reset does
+
 A reset deletes the workspace and rebuilds it:
-1. copies `task_api/` (without caches or `*.db` files),
+1. copies `task_api/` (without caches or `*.db` files), or clones the remote in remote mode,
 2. runs `git init` and makes one baseline commit on `main`,
 3. creates and checks out the work branch `repopilot/work`.
 
