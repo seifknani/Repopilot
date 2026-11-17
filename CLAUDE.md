@@ -25,7 +25,7 @@ maintenance agent that investigates and fixes real bugs in our own Task Manageme
 - `sandbox/reset.py` – copies `task_api/` → `sandbox/workspace/` (git-ignored), runs `git init`,
   makes a baseline commit on `main`, and checks out the work branch `repopilot/work`
 - `agent/` – tools, schemas, policy, approvals, executor, logging (loop comes in step 10)
-- `tests/` – tests for the agent and the sandbox (root `pytest.ini`)
+- `tests/` – tests for the agent and the sandbox (root `pytest.ini`, 76 tests, all must pass)
 - `eval/` – evaluation material (`bugs.md` now; scenarios in step 13)
 - `docs/` – assignment PDF, instructions, project description
 
@@ -50,7 +50,7 @@ summary line disappears.
 - [x] A baseline verified, Git initialised
 - [x] B ARCHITECTURE §1.3 reconciled with the PDF
 - [x] 8 five documented bugs (`eval/bugs.md`)
-- [ ] 9 `sandbox/reset.py` + five tools with Pydantic schemas, permission checks, logging
+- [x] 9 `sandbox/reset.py` + five tools with Pydantic schemas, permission checks, logging
 - [ ] 10 agent loop – **write the stop rule and its test first** (PDF p.7)
 - [ ] 11 safety/approval hardening (tests-after-edit, injection defences)
 - [ ] 12 Streamlit UI

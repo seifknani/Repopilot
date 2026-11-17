@@ -127,12 +127,16 @@ repopilot/                      ← the project (one Git repo, cloned by graders
 │   │                              baseline commit on main, creates branch repopilot/work
 │   └── workspace/              ← the REAL Git repo RepoPilot operates on (git-ignored)
 ├── agent/
-│   ├── tools/                  ← explorer, reader, editor, test_runner, git_manager
-│   ├── schemas.py              ← Pydantic input/output models for every tool
-│   ├── policy.py               ← path allow-list, branch guard, approval gates
-│   ├── loop.py                 ← LLM tool-calling loop with budgets & stop conditions
-│   ├── llm.py                  ← thin provider adapter (+ deterministic scripted LLM for tests)
-│   └── logging.py              ← JSONL trajectory log
+│   ├── tools/                  ← explorer, reader, editor, test_runner, git_manager (+ registry)
+│   ├── schemas.py              ← strict Pydantic input models + ToolResult (untrusted wrapping)
+│   ├── policy.py               ← path allow-list, edit allow-list (app/*.py), branch guard
+│   ├── approvals.py            ← human checkpoint: content-hashed proposals, approve/reject
+│   ├── executor.py             ← validate → run → clear error → log, for every tool call
+│   ├── trajectory_log.py       ← JSONL trajectory log (not "logging.py": avoids stdlib clash)
+│   ├── config.py, errors.py, gitutil.py
+│   ├── loop.py                 ← (step 10) LLM tool-calling loop with budgets & stop conditions
+│   └── llm.py                  ← (step 10) provider adapter + deterministic scripted LLM for tests
+├── tests/                      ← agent + sandbox tests (root pytest.ini)
 ├── ui/app.py                   ← Streamlit front end
 └── eval/                       ← scenarios.yaml, runner, metrics, results
 ```
@@ -163,6 +167,31 @@ User bug report ─► Agent loop ─► LLM (tool-calling)
 Write operations are split in two: the LLM can only *propose* an edit
 (`propose_edit` returns a diff and a proposal id); applying it requires a human
 decision keyed on that id, so a repeated call with the same id is a no-op.
+
+### 2.1 Tool operations (implemented in step 9)
+
+| Tool | Operation | Side effect | Guard |
+|------|-----------|-------------|-------|
+| Repository Explorer | `list_files`, `search_code` | none | path allow-list; `.git` and caches hidden |
+| File Reader | `read_file` | none | path allow-list; size and line limits |
+| Code Editor | `propose_edit` | none (creates a pending proposal) | edit allow-list `app/*.py`; `old_text` must be unique |
+| Code Editor | `apply_edit` | writes the file | human-approved, work branch, file unchanged since proposal |
+| Test Runner | `run_tests` | none (temp DB, no bytecode) | target must match `tests/...py[::id]`; timeout |
+| Git Manager | `git_status`, `git_diff`, `git_log` | none | — |
+| Git Manager | `ensure_work_branch` | checks out `repopilot/work` | the only branch switch possible |
+| Git Manager | `propose_commit` | none (creates a pending proposal) | work branch; tracked changes exist |
+| Git Manager | `commit` | creates a commit | human-approved; HEAD and diff unchanged since proposal |
+
+- **Idempotency:** a proposal id is a hash of its content plus the repository state at proposal time.
+  Proposing the same thing twice returns the existing proposal, and applying or committing twice is a no-op.
+  If the repository changes in between, the proposal is marked `stale` and must be re-proposed.
+- **Errors:** every failure reaches the model as one actionable sentence. The categories are
+  `invalid_arguments`, `policy_violation`, `tool_error` and `internal_error`. The exception details
+  are kept only in the log.
+- **Untrusted output:** the results of `read_file`, `search_code`, `list_files`, `run_tests` and the
+  git read operations are wrapped in `<untrusted_repo_content>`. Any copy of that tag inside the
+  repository text is escaped, so repository text cannot close the wrapper.
+- `approve` / `reject` live on `ApprovalStore` and are **not** tools, so the model cannot approve its own writes.
 
 ## 3. Task Management API design
 
