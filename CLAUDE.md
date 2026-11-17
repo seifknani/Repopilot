@@ -25,9 +25,10 @@ maintenance agent that investigates and fixes real bugs in our own Task Manageme
 - `sandbox/reset.py` – copies `task_api/` → `sandbox/workspace/` (git-ignored), runs `git init`,
   makes a baseline commit on `main`, and checks out the work branch `repopilot/work`
 - `agent/` – tools, schemas, policy, approvals, executor, logging, stop_rule, llm (ScriptedLLM), loop
-- `tests/` – tests for the agent and the sandbox (root `pytest.ini`, 212 tests, all must pass; ~4 min)
+- `tests/` – tests for the agent and the sandbox (root `pytest.ini`, 231 tests, all must pass; ~5 min)
 - `ui/app.py` – Streamlit UI: process diagram, timeline, approvals, tests, git, repo browser, raw log
-- `eval/` – evaluation material (`bugs.md` now; scenarios in step 13)
+- `eval/` – `bugs.md` (answer key), `scenarios.py` (32 scenarios), `run_eval.py` (metrics M1–M10),
+  `results/` (committed summaries). Run: `.venv/Scripts/python -m eval.run_eval [--llm env]`
 - `docs/` – assignment PDF, instructions, project description
 
 ## Commands (Windows, run from repo root)
@@ -62,7 +63,8 @@ summary line disappears.
 - [x] 11 safety: commit gate (full tests after last edit, no regressions), injection detector,
       edit risk flags, baseline test run, 7 injection cases, `errors.md`, `threat_model.md`
 - [x] 12 Streamlit UI (`ui/app.py`, done early at the user's request; scripted demos in `agent/demo_scripts.py`)
-- [ ] 13 eval suite (≥30 scenarios, ≥5 injection, metrics M1–M10, cost at 100×)
+- [~] 13 eval suite: harness + 32 scenarios + scripted baseline done (32/32); OpenAI-compatible
+      adapter (`agent/llm.py`, Groq default, `.env.example`). STILL NEEDED: a real-model run
 - [ ] 14 deliverables: README (one setup + one run command, Contributions), errors.md,
       threat_model.md, report.pdf (≤4 pages, fixed 6 sections), postmortem.md
 
@@ -74,6 +76,7 @@ summary line disappears.
   Purpose: each member knows which part to revise so they can answer questions at the demo.
 
 ## Open decisions
-- LLM provider: not chosen yet; the user chose the scripted LLM for now. A real one must support tool calling and report token usage.
-  `agent/llm.py` should be a thin adapter so the provider can be swapped.
+- LLM provider: OpenAI-compatible adapter exists (Groq default). User asked (2026-11-18) about Claude:
+  answered yes, needs an `AnthropicLLM` adapter with the official `anthropic` SDK + a paid key; awaiting
+  their choice of provider/model and key. No key is configured on this machine yet.
 - Instructor approval of the RepoPilot idea is needed by the end of Week 11 (PDF p.6).

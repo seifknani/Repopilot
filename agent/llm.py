@@ -109,3 +109,136 @@ def find_last_tool_result(messages: list[dict], name: Optional[str] = None) -> O
         if message.get("role") == "tool" and (name is None or message.get("name") == name):
             return message["content"]
     return None
+
+
+# --- real provider: any OpenAI-compatible chat-completions API (default: Groq) ------------------
+import os  # noqa: E402
+import time  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+import httpx  # noqa: E402
+
+DEFAULT_BASE_URL = "https://api.groq.com/openai/v1"
+DEFAULT_MODEL = "openai/gpt-oss-120b"
+
+
+def to_openai_messages(system: str, messages: list[dict]) -> list[dict]:
+    """Translate the neutral message format into OpenAI chat-completions messages."""
+    out: list[dict] = [{"role": "system", "content": system}]
+    for m in messages:
+        if m["role"] == "user":
+            out.append({"role": "user", "content": m["content"]})
+        elif m["role"] == "assistant":
+            msg: dict = {"role": "assistant", "content": m.get("content") or None}
+            if m.get("tool_calls"):
+                msg["tool_calls"] = [
+                    {"id": c["id"], "type": "function",
+                     "function": {"name": c["name"], "arguments": json.dumps(c["arguments"], default=str)}}
+                    for c in m["tool_calls"]
+                ]
+            out.append(msg)
+        elif m["role"] == "tool":
+            out.append({"role": "tool", "tool_call_id": m["tool_call_id"], "content": m["content"]})
+    return out
+
+
+def to_openai_tools(tools: list[dict]) -> list[dict]:
+    return [{"type": "function", "function": {"name": t["name"], "description": t["description"],
+                                              "parameters": t["input_schema"]}} for t in tools]
+
+
+class OpenAICompatibleLLM:
+    """Calls a chat-completions endpoint with tool calling and reports the real token usage."""
+
+    def __init__(self, model: str, api_key: str, base_url: str = DEFAULT_BASE_URL, *, temperature: float = 0.0,
+                 max_output_tokens: int = 2048, timeout_s: float = 90.0, rate_limit_retries: int = 4,
+                 max_wait_s: float = 60.0, transport: Optional[httpx.BaseTransport] = None,
+                 sleep: Callable[[float], None] = time.sleep) -> None:
+        if not api_key:
+            raise LLMError("No API key configured for the LLM provider.")
+        self.name = model
+        self.temperature = temperature
+        self.max_output_tokens = max_output_tokens
+        self.rate_limit_retries = rate_limit_retries
+        self.max_wait_s = max_wait_s
+        self.sleep = sleep
+        self.client = httpx.Client(base_url=base_url.rstrip("/"), timeout=timeout_s, transport=transport,
+                                   headers={"Authorization": f"Bearer {api_key}"})
+
+    def complete(self, system: str, messages: list[dict], tools: list[dict]) -> LLMResponse:
+        payload = {
+            "model": self.name, "temperature": self.temperature, "max_tokens": self.max_output_tokens,
+            "messages": to_openai_messages(system, messages), "tools": to_openai_tools(tools), "tool_choice": "auto",
+        }
+        for attempt in range(self.rate_limit_retries + 1):
+            try:
+                response = self.client.post("/chat/completions", json=payload)
+            except httpx.HTTPError as exc:
+                raise LLMError(f"Network error calling the LLM: {type(exc).__name__}") from exc
+            if response.status_code == 429 and attempt < self.rate_limit_retries:
+                # Free tiers limit tokens per minute: wait as instructed, then retry the same request.
+                try:
+                    wait = float(response.headers.get("retry-after", "5"))
+                except ValueError:
+                    wait = 5.0
+                self.sleep(min(max(wait, 1.0), self.max_wait_s))
+                continue
+            if response.status_code != 200:
+                raise LLMError(f"LLM provider returned HTTP {response.status_code}: {response.text[:200]}")
+            break
+        try:
+            body = response.json()
+            message = body["choices"][0]["message"]
+        except (ValueError, KeyError, IndexError) as exc:
+            raise LLMError("The LLM provider returned an unexpected response.") from exc
+
+        calls = []
+        for i, tc in enumerate(message.get("tool_calls") or []):
+            raw = (tc.get("function") or {}).get("arguments") or "{}"
+            try:
+                args = json.loads(raw)
+            except json.JSONDecodeError:
+                args = raw  # the executor answers "Arguments ... must be a JSON object"
+            calls.append(ToolCall(name=(tc.get("function") or {}).get("name", ""), arguments=args,
+                                  id=tc.get("id") or f"call_{i}"))
+        usage = body.get("usage") or {}
+        return LLMResponse(
+            text=message.get("content") or "",
+            tool_calls=calls,
+            input_tokens=int(usage.get("prompt_tokens") or 0),
+            output_tokens=int(usage.get("completion_tokens") or 0),
+            usage_estimated=not usage,
+        )
+
+
+def load_dotenv(path: Path) -> None:
+    """Minimal .env reader (KEY=VALUE lines); existing environment variables win."""
+    if not path.is_file():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            key, value = line.split("=", 1)
+            os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+def llm_from_env(project_root: Optional[Path] = None):
+    """Build the real LLM and its Pricing from environment variables (or a git-ignored .env).
+
+    REPOPILOT_LLM_API_KEY (or GROQ_API_KEY), REPOPILOT_LLM_MODEL, REPOPILOT_LLM_BASE_URL,
+    REPOPILOT_LLM_PRICE_IN / REPOPILOT_LLM_PRICE_OUT (USD per million tokens).
+    Returns (None, None) when no key is configured.
+    """
+    from agent.stop_rule import Pricing  # local import: stop_rule does not depend on llm
+
+    if project_root is not None:
+        load_dotenv(project_root / ".env")
+    key = os.environ.get("REPOPILOT_LLM_API_KEY") or os.environ.get("GROQ_API_KEY")
+    if not key:
+        return None, None
+    model = os.environ.get("REPOPILOT_LLM_MODEL", DEFAULT_MODEL)
+    pricing = Pricing(model=model,
+                      input_per_mtok=float(os.environ.get("REPOPILOT_LLM_PRICE_IN", "0")),
+                      output_per_mtok=float(os.environ.get("REPOPILOT_LLM_PRICE_OUT", "0")))
+    llm = OpenAICompatibleLLM(model, key, os.environ.get("REPOPILOT_LLM_BASE_URL", DEFAULT_BASE_URL))
+    return llm, pricing
