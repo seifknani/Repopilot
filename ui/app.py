@@ -69,6 +69,12 @@ def tool_records(name: str | None = None) -> list[dict]:
     return [r for r in records() if r["type"] == "tool_call" and (name is None or r["tool"] == name)]
 
 
+def injection_findings() -> list[dict]:
+    found = [f for r in tool_records() for f in r["data"].get("injection_flags") or []]
+    found += [f for r in records() if r["type"] == "run_start" for f in r.get("injection_flags") or []]
+    return found
+
+
 # --- actions (button callbacks) --------------------------------------------------------
 def action_reset() -> None:
     remote = state.get("remote_url", "").strip() if state.get("mode") == "GitHub remote" else None
@@ -246,6 +252,13 @@ if agent and agent.status == RunStatus.AWAITING_APPROVAL and agent.pending:
         if pending.kind == "edit":
             proposal = agent.executor.approvals.get(pending.proposal_id)
             st.markdown(f"**File:** `{proposal.path}`  \n**Agent's reason:** {proposal.reason}")
+            if proposal.risk_flags:
+                st.error("**Risk flags:** " + "; ".join(proposal.risk_flags)
+                         + ". A bug fix should not need this. Check for injected instructions before approving.")
+        flagged = injection_findings()
+        if flagged:
+            st.warning(f"During this run, {len(flagged)} passage(s) of repository text looked like instructions "
+                       "to the agent (see Timeline). Make sure this proposal is not following them.")
         st.code(pending.summary, language="diff")
         st.text_input("Note for the agent (optional, e.g. why you reject)", key="note")
         a, b = st.columns(2)
@@ -269,10 +282,17 @@ with tabs[0]:
     for r in records():
         if r["type"] == "run_start":
             st.markdown(f"**Run started**: model `{r['model']}`, {len(r['tools'])} tools available to the agent.")
+            for f in r.get("injection_flags") or []:
+                st.warning(f"Bug report contains instruction-like text ({f['kind']}): {f['excerpt']}")
         elif r["type"] == "llm_response":
             st.markdown(f"**Step {r['step']} · plan:** {r['explanation']}")
         elif r["type"] == "tool_call":
             mark = "ok" if r["ok"] else "FAILED"
+            found = r["data"].get("injection_flags") or []
+            if found:
+                mark += f" · INJECTION-LIKE TEXT ({len(found)})"
+            for f in found:
+                st.warning(f"`{r['tool']}` output contains instruction-like text ({f['kind']}): {f['excerpt']}")
             with st.expander(f"{r['actor']} → `{r['tool']}` · {mark} · {r['duration_ms']:.0f} ms"):
                 st.markdown("**Input**")
                 st.json(r["input"] if r["input"] is not None else {})

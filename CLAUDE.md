@@ -25,7 +25,7 @@ maintenance agent that investigates and fixes real bugs in our own Task Manageme
 - `sandbox/reset.py` – copies `task_api/` → `sandbox/workspace/` (git-ignored), runs `git init`,
   makes a baseline commit on `main`, and checks out the work branch `repopilot/work`
 - `agent/` – tools, schemas, policy, approvals, executor, logging, stop_rule, llm (ScriptedLLM), loop
-- `tests/` – tests for the agent and the sandbox (root `pytest.ini`, 166 tests, all must pass)
+- `tests/` – tests for the agent and the sandbox (root `pytest.ini`, 212 tests, all must pass; ~4 min)
 - `ui/app.py` – Streamlit UI: process diagram, timeline, approvals, tests, git, repo browser, raw log
 - `eval/` – evaluation material (`bugs.md` now; scenarios in step 13)
 - `docs/` – assignment PDF, instructions, project description
@@ -59,11 +59,19 @@ summary line disappears.
 - [x] 8 five documented bugs (`eval/bugs.md`)
 - [x] 9 `sandbox/reset.py` + five tools with Pydantic schemas, permission checks, logging
 - [x] 10 agent loop + stop rule (scripted LLM only; real provider adapter still to add)
-- [ ] 11 safety/approval hardening (tests-after-edit, injection defences)
+- [x] 11 safety: commit gate (full tests after last edit, no regressions), injection detector,
+      edit risk flags, baseline test run, 7 injection cases, `errors.md`, `threat_model.md`
 - [x] 12 Streamlit UI (`ui/app.py`, done early at the user's request; scripted demos in `agent/demo_scripts.py`)
 - [ ] 13 eval suite (≥30 scenarios, ≥5 injection, metrics M1–M10, cost at 100×)
 - [ ] 14 deliverables: README (one setup + one run command, Contributions), errors.md,
       threat_model.md, report.pdf (≤4 pages, fixed 6 sections), postmortem.md
+
+## Pending user requests (do ONLY after steps 13 and 14 are finished)
+- A user-friendly project report (like the assignment/project documents, but easy for classmates
+  to understand quickly).
+- A Contributions section: split the project into 4 parts with subtasks and assign one part to each
+  team member: Seifeddine Knani, Mohamed Amine Zouaoui, Walid Fakhfakh, Alaaeddine Bousselmi.
+  Purpose: each member knows which part to revise so they can answer questions at the demo.
 
 ## Open decisions
 - LLM provider: not chosen yet; the user chose the scripted LLM for now. A real one must support tool calling and report token usage.

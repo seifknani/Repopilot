@@ -1,0 +1,37 @@
+# Error taxonomy
+
+The PDF (p.8) asks for each class of failure: what the agent does, and a test that shows it.
+Every failure reaches the model as **one actionable sentence, never a stack trace**
+(`agent/executor.py`). It is logged with an `error_type`: `invalid_arguments`,
+`policy_violation`, `tool_error`, `internal_error` or `refused_by_loop`. Failures never stop
+the loop on their own. The stop rule (`agent/stop_rule.py`) decides when to give up.
+
+The first seven classes are the ones named in the assignment. The others are specific to a
+coding agent. Every test named below exists; `tests/test_docs.py` checks this automatically.
+
+| # | Class | Example | What RepoPilot does | Tests |
+|---|-------|---------|---------------------|-------|
+| E1 | **Tool down** | `git` missing from PATH; the LLM provider returns 503 | Git: clear error *"git is not installed…"*, so the agent can continue with other tools. LLM: retried up to `llm_max_retries`, then stop `llm_error` | `tests/test_executor.py::test_git_unavailable_is_a_clear_error`, `tests/test_loop_stops.py::test_provider_down_stops_after_retries`, `tests/test_loop_stops.py::test_transient_provider_error_is_retried` |
+| E2 | **Bad arguments** | missing `path`, an unknown field, `start_line=0`, `"-x"` as a test target | Pydantic schema with `extra="forbid"` rejects the call before anything runs; the error names the field | `tests/test_executor.py::test_bad_arguments_give_clear_errors`, `tests/test_executor.py::test_non_dict_arguments`, `tests/test_tools.py::test_run_tests_rejects_bad_targets` |
+| E3 | **Empty result** | search finds nothing; nothing to commit or push | `ok=True` with an explicit *"No matches… try…"*, or a clear error that says what to do first | `tests/test_tools.py::test_search_code_empty_result_is_clear`, `tests/test_tools.py::test_read_file_start_past_end`, `tests/test_remote.py::test_push_requires_a_commit` |
+| E4 | **Wrong tool** | an invented tool (`shell`); the model calls human-only `apply_edit`/`commit`/`push`; editing a test file; push in local mode | Unknown tool: lists the valid ones. Human-only: `refused_by_loop`. Tests and config are read-only (`policy_violation`) | `tests/test_executor.py::test_unknown_tool`, `tests/test_loop.py::test_model_cannot_apply_or_commit_by_itself`, `tests/test_tools.py::test_editing_tests_or_config_is_refused`, `tests/test_remote.py::test_push_unavailable_in_local_mode` |
+| E5 | **Loop** | the same call over and over; re-proposing a rejected edit; never finishing | Identical call (same arguments, same repo state) > `max_repeated_call` → stop `loop_detected`. A rejected edit returns its old proposal and is not re-queued. `max_steps` bounds everything | `tests/test_loop_stops.py::test_identical_call_loop_is_detected`, `tests/test_loop.py::test_reproposing_a_rejected_edit_does_not_pause_again`, `tests/test_loop_stops.py::test_endless_agent_stops_exactly_at_max_steps` |
+| E6 | **Timeout** | a test hangs; the run takes too long | pytest is killed after `test_timeout_s` with a clear error; git and push have their own timeouts. Agent time over `max_wall_time_s` → stop `timeout` | `tests/test_safety.py::test_hanging_test_suite_times_out`, `tests/test_loop_stops.py::test_timeout_with_fake_clock` |
+| E7 | **User changes mind** | the human rejects a proposal or stops the run | Reject: nothing is written, and the model is told why. Stop: the pending proposal is rejected and the run ends with `user_stopped` | `tests/test_loop.py::test_rejected_edit_changes_nothing_and_agent_is_told`, `tests/test_loop.py::test_user_stop_while_waiting_rejects_the_proposal`, `tests/test_ui.py::test_reject_through_the_ui`, `tests/test_ui.py::test_stop_through_the_ui` |
+| E8 | Not found | a wrong file name; an unknown test id | *"File not found: 'x'. Use list_files or search_code…"*; *"pytest rejected the target…"* | `tests/test_tools.py::test_read_missing_file_error`, `tests/test_policy.py::test_missing_file_gives_actionable_error`, `tests/test_tools.py::test_run_tests_unknown_test_id` |
+| E9 | Unsafe request | `../`, absolute paths, `.git/`, writing while on `main` | `policy_violation`, nothing touched | `tests/test_policy.py::test_paths_outside_workspace_or_into_git_are_refused`, `tests/test_policy.py::test_branch_guard`, `tests/test_tools.py::test_apply_on_main_is_refused` |
+| E10 | Edit does not apply | `old_text` not found, or found twice | Clear error asking to re-read and copy the exact text or add context; no proposal is created | `tests/test_tools.py::test_old_text_not_found_or_ambiguous` |
+| E11 | Stale state | the file, HEAD or diff changed between proposal and execution | Proposal marked `stale`, nothing written, committed or pushed; the model must re-propose | `tests/test_tools.py::test_stale_proposal_is_not_applied`, `tests/test_tools.py::test_stale_commit_proposal_is_refused`, `tests/test_remote.py::test_stale_push_is_refused` |
+| E12 | Failed tests / regression | tests not re-run after an edit; an edit breaks a previously passing test | Commit gate: commit refused until the full suite ran after the last edit, and refused if any test from the baseline run now fails | `tests/test_safety.py::test_commit_requires_full_test_run_after_the_edit`, `tests/test_safety.py::test_commit_refused_when_the_edit_breaks_passing_tests`, `tests/test_safety.py::test_approved_commit_is_rechecked_at_commit_time` |
+| E13 | Repeated failures (retry limit) | the agent keeps calling failing tools | After `max_consecutive_failures` (3) in a row → stop `too_many_failures`; a success resets the count | `tests/test_loop_stops.py::test_consecutive_tool_failures_stop_the_run`, `tests/test_stop_rule.py::test_consecutive_failures_reset_on_success` |
+| E14 | Partial failure | step 1 of 4 fails, or a call comes after a pending proposal in the same turn | The failure is reported and the run continues, so the agent can recover. Calls after a pending proposal are not executed and are told why | `tests/test_safety.py::test_agent_recovers_after_a_failed_tool_call`, `tests/test_loop.py::test_calls_after_a_proposal_in_the_same_turn_are_not_executed` |
+| E15 | Budget exhausted | too many tokens, too much cost, too many tool calls | Stop `max_tokens` / `max_cost` / `max_tool_calls` before doing more work | `tests/test_loop_stops.py::test_token_limit`, `tests/test_loop_stops.py::test_cost_limit`, `tests/test_loop_stops.py::test_tool_call_limit_with_many_calls_in_one_turn` |
+| E16 | Duplicate write | the same edit, commit or push requested twice | Content-hashed proposals: the same id is returned, and a second apply, commit or push is a no-op | `tests/test_tools.py::test_propose_same_edit_twice_is_idempotent`, `tests/test_tools.py::test_approved_edit_applies_once`, `tests/test_tools.py::test_commit_after_approval_is_idempotent_and_main_untouched` |
+| E17 | Unexpected exception | a bug inside a tool | Caught: *"Internal error in X (RuntimeError)…"* for the model; exception details only in the log | `tests/test_executor.py::test_unexpected_exception_is_contained` |
+| E18 | Injected instructions | repository text tells the agent what to do | See `threat_model.md` | `tests/test_injection.py::test_inj1_readme_orders_repository_deletion` (and INJ-2 … INJ-6) |
+
+## Recovery after failure
+
+`tests/test_safety.py::test_agent_recovers_after_a_failed_tool_call` shows a single run in which a
+tool fails once and the agent still finishes. The **recovery-after-failure rate** over many scenarios
+(PDF p.9) is measured by the evaluation suite in step 13.

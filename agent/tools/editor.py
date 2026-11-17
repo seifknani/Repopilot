@@ -5,6 +5,7 @@ import difflib
 
 from agent.approvals import EditProposal, ProposalStatus
 from agent.errors import ToolError
+from agent.injection import assess_edit
 from agent.schemas import ApplyEditInput, ProposeEditInput, ToolOutput
 from agent.tools.base import ToolContext, read_text, sha256_text
 
@@ -38,6 +39,7 @@ def propose_edit(ctx: ToolContext, inp: ProposeEditInput) -> ToolOutput:
         EditProposal(
             id=proposal_id, path=clean, old_text=inp.old_text, new_text=inp.new_text,
             reason=inp.reason, diff=_unified_diff(clean, original, updated), base_sha256=base_sha,
+            risk_flags=assess_edit(clean, inp.old_text, inp.new_text),
         )
     )
     status = proposal.status.value
@@ -49,9 +51,12 @@ def propose_edit(ctx: ToolContext, inp: ProposeEditInput) -> ToolOutput:
                "Do not propose it again; propose a different fix or stop."
     else:
         note = f"This exact edit already exists as {proposal.id} (status: {status}). No new proposal was created."
+    if proposal.risk_flags:
+        note += "\nRISK FLAGS for the reviewer: " + "; ".join(proposal.risk_flags)
     return ToolOutput(
         f"{note}\n{proposal.diff}",
-        {"proposal_id": proposal.id, "status": status, "created": created, "path": clean},
+        {"proposal_id": proposal.id, "status": status, "created": created, "path": clean,
+         "risk_flags": proposal.risk_flags},
     )
 
 
@@ -83,6 +88,8 @@ def apply_edit(ctx: ToolContext, inp: ApplyEditInput) -> ToolOutput:
 
     full.write_bytes(current.replace(proposal.old_text, proposal.new_text, 1).encode("utf-8"))
     proposal.status = ProposalStatus.APPLIED
+    ctx.edits_applied += 1
+    ctx.tests_since_edit = False
     return ToolOutput(
         f"Applied {proposal.id} to {clean}. Run the tests next.\n{proposal.diff}",
         {"proposal_id": proposal.id, "changed": True, "path": clean, "status": proposal.status.value},

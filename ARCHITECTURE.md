@@ -272,3 +272,15 @@ Layers: `main.py` (HTTP only) → `service.py` (business rules, errors) →
 - Every view is built from the real trajectory log and the real sandbox repository.
   `tests/test_ui.py` drives the UI headlessly with `streamlit.testing`.
 
+### 2.4 Safety hardening (step 11)
+
+- **Baseline test run:** before the agent's first step, the full suite runs once (actor `system`). Its
+  failing set is the baseline for the regression guard, and the result is shown to the model.
+- **Commit gate:** `propose_commit` and `commit` are refused unless the full suite ran after the last
+  applied edit, and refused if any test outside the baseline's failing set now fails.
+- **Injection detector** (`agent/injection.py`): scans every untrusted tool output and the bug report.
+  Findings go to the model as a warning, into the log, and to the UI. It is a signal, not the boundary.
+- **Edit risk flags:** proposals that add `os.system`, `subprocess`, `eval`, network, file deletion,
+  env access or test skipping, remove many lines, or contain instruction-like text are flagged to the reviewer.
+- Details and results: `errors.md` (E1–E18, a test per class) and `threat_model.md` (INJ-1 … INJ-7).
+

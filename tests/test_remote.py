@@ -112,6 +112,7 @@ def test_push_without_approval_and_rejected_push_publish_nothing(remote_executor
     pid = ex.call("propose_edit", FIX).data["proposal_id"]
     ex.approvals.approve(pid)
     ex.call("apply_edit", {"proposal_id": pid})
+    ex.call("run_tests", {})  # commit gate: full suite after the edit
     cid = ex.call("propose_commit", {"message": "Fix inverted status filter"}).data["proposal_id"]
     ex.approvals.approve(cid)
     ex.call("commit", {"proposal_id": cid})
@@ -130,6 +131,7 @@ def test_stale_push_is_refused(remote_executor, remote):
         pid = ex.call("propose_edit", fix).data["proposal_id"]
         ex.approvals.approve(pid)
         ex.call("apply_edit", {"proposal_id": pid})
+        ex.call("run_tests", {})  # commit gate: full suite after the edit
         cid = ex.call("propose_commit", {"message": f"Fix in {fix['path']}"}).data["proposal_id"]
         ex.approvals.approve(cid)
         ex.call("commit", {"proposal_id": cid})

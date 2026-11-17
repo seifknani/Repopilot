@@ -59,6 +59,13 @@ def run_tests(ctx: ToolContext, inp: RunTestsInput) -> ToolOutput:
         counts["errors" if kind.startswith("error") else kind] += int(number)
     failing = [m.group(2) for line in lines if (m := _FAILED.match(line))]
 
+    if inp.target is None and proc.returncode in (0, 1):  # a complete, valid run of the full suite
+        failures = frozenset(failing)
+        if ctx.edits_applied == 0 and ctx.baseline_failures is None:
+            ctx.baseline_failures = failures
+        ctx.last_full_failures = failures
+        ctx.tests_since_edit = True
+
     meaning = EXIT_MEANING.get(proc.returncode, f"exit code {proc.returncode}")
     tail_limit = ctx.config.max_output_chars // 2
     tail = out[-tail_limit:] if len(out) > tail_limit else out

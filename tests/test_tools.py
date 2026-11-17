@@ -221,6 +221,7 @@ def test_git_status_and_diff(executor):
 def test_commit_requires_changes_and_approval(executor, workspace):
     assert "no changes" in executor.call("propose_commit", {"message": "Fix status filter"}).error
     approve_and_apply(executor, BUG1_FIX)
+    executor.call("run_tests", {})  # commit gate: full suite after the edit
     proposed = executor.call("propose_commit", {"message": "Fix inverted status filter"})
     assert proposed.ok and proposed.data["status"] == "pending"
     pid = proposed.data["proposal_id"]
@@ -232,6 +233,7 @@ def test_commit_requires_changes_and_approval(executor, workspace):
 def test_commit_after_approval_is_idempotent_and_main_untouched(executor, workspace):
     main_before = git(workspace, "rev-parse", "main")
     approve_and_apply(executor, BUG1_FIX)
+    executor.call("run_tests", {})  # commit gate: full suite after the edit
     pid = executor.call("propose_commit", {"message": "Fix inverted status filter"}).data["proposal_id"]
     assert executor.call("propose_commit", {"message": "Fix inverted status filter"}).data["proposal_id"] == pid
     executor.approvals.approve(pid)
@@ -248,6 +250,7 @@ def test_commit_after_approval_is_idempotent_and_main_untouched(executor, worksp
 
 def test_stale_commit_proposal_is_refused(executor, workspace):
     approve_and_apply(executor, BUG1_FIX)
+    executor.call("run_tests", {})  # commit gate: full suite after the edit
     pid = executor.call("propose_commit", {"message": "Fix inverted status filter"}).data["proposal_id"]
     executor.approvals.approve(pid)
     path = workspace / "app" / "service.py"

@@ -64,11 +64,29 @@ def _pending_changes(ctx: ToolContext) -> tuple[str, str]:
     return _git(ctx, "diff", "--no-color", "HEAD"), _git(ctx, "diff", "--stat", "HEAD").strip()
 
 
+def check_tests_before_commit(ctx: ToolContext) -> None:
+    """Commit gate: the full suite ran after the last edit, and no previously passing test fails."""
+    if not ctx.tests_since_edit or ctx.last_full_failures is None:
+        raise ToolError(
+            "The full test suite has not been run successfully since the last edit. "
+            "Run run_tests (without a target) before proposing a commit."
+        )
+    if ctx.baseline_failures is not None:
+        regressions = sorted(ctx.last_full_failures - ctx.baseline_failures)
+        if regressions:
+            shown = ", ".join(regressions[:5]) + (" ..." if len(regressions) > 5 else "")
+            raise ToolError(
+                f"The change breaks {len(regressions)} test(s) that passed before: {shown}. "
+                "It cannot be committed; revise the fix."
+            )
+
+
 def propose_commit(ctx: ToolContext, inp: ProposeCommitInput) -> ToolOutput:
     ctx.policy.check_work_branch()
     diff, stat = _pending_changes(ctx)
     if not diff.strip():
         raise ToolError("There are no changes to commit. Apply an approved edit first.")
+    check_tests_before_commit(ctx)
     head = head_sha(ctx.root, ctx.config.git_timeout_s)
     changes_sha = sha256_text(diff)
     proposal_id = "commit-" + sha256_text("\0".join([inp.message, head, changes_sha]))[:12]
@@ -100,6 +118,7 @@ def commit(ctx: ToolContext, inp: CommitInput) -> ToolOutput:
             "nothing was committed."
         )
     ctx.policy.check_work_branch()
+    check_tests_before_commit(ctx)
     diff, _ = _pending_changes(ctx)
     if head_sha(ctx.root, ctx.config.git_timeout_s) != proposal.head_sha or sha256_text(diff) != proposal.changes_sha256:
         proposal.status = ProposalStatus.STALE

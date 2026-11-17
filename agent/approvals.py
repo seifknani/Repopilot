@@ -39,6 +39,7 @@ class EditProposal(BaseModel):
     reason: str
     diff: str
     base_sha256: str  # hash of the file when the proposal was made
+    risk_flags: list[str] = Field(default_factory=list)  # shown to the human reviewer
     status: ProposalStatus = ProposalStatus.PENDING
     created_at: str = Field(default_factory=_now)
     decided_at: Optional[str] = None

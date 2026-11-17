@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 from agent.approvals import ApprovalStore
 from agent.config import AgentConfig
@@ -16,6 +17,11 @@ class ToolContext:
     config: AgentConfig
     policy: Policy
     approvals: ApprovalStore
+    # Commit gate state (per session): tests must run after the last edit, without regressions.
+    edits_applied: int = 0
+    tests_since_edit: bool = False
+    baseline_failures: Optional[frozenset] = None  # failing tests of the first full run before any edit
+    last_full_failures: Optional[frozenset] = None
 
     @property
     def root(self) -> Path:

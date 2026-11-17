@@ -7,8 +7,13 @@ import random
 import pytest
 
 from agent.llm import LLMError, LLMResponse, ScriptedLLM, call, say
-from agent.loop import Agent, RunStatus
+from functools import partial
+
+from agent.loop import Agent as _Agent, RunStatus
 from agent.stop_rule import Limits, Pricing, StopReason
+
+# These tests measure the loop's own limits; the baseline test run (a system call) is not needed.
+Agent = partial(_Agent, baseline_tests=False)
 
 
 def endless_reader():

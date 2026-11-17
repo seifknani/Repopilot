@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from agent.approvals import ApprovalStore
 from agent.config import AgentConfig
 from agent.errors import PolicyViolation, ToolError
+from agent.injection import scan
 from agent.policy import Policy
 from agent.schemas import ToolResult
 from agent.tools import TOOLS
@@ -62,6 +63,10 @@ class ToolExecutor:
             parsed = spec.input_model.model_validate(args or {})
             result = spec.func(self.ctx, parsed)
             output, data, untrusted, ok = result.output, result.data, result.untrusted, True
+            if untrusted:
+                findings = scan(output)
+                if findings:
+                    data = {**data, "injection_flags": findings}
         except ValidationError as exc:
             error = format_validation_error(name, exc)
             data = {"error_type": "invalid_arguments"}
