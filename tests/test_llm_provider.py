@@ -154,3 +154,12 @@ def test_loop_does_not_retry_a_non_retryable_error(executor):
                    baseline_tests=False).start("x")
     assert result.stop_reason == StopReason.LLM_ERROR
     assert sum(r["type"] == "llm_error" for r in executor.logger.records) == 1
+
+
+def test_no_credits_is_explained_to_the_user(executor):
+    from agent.llm import ScriptedLLM
+    from agent.loop import Agent
+
+    err = LLMError('HTTP 429: {"type": "insufficient_quota"}', retryable=False)
+    result = Agent(executor, ScriptedLLM([err], repeat_last=True), baseline_tests=False).start("x")
+    assert "no credits left" in result.final_message

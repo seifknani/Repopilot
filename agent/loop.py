@@ -251,7 +251,7 @@ class Agent:
         step = self.budget.begin_step()
         response = self._ask_llm(state["messages"], step)
         if response is None:
-            return _stop(StopReason.LLM_ERROR, "The model provider failed repeatedly.")
+            return _stop(StopReason.LLM_ERROR, self._llm_error_message())
         call_cost = self.pricing.cost(response.input_tokens, response.output_tokens, response.cached_input_tokens)
         if self.ledger is not None:
             self.ledger.record(call_cost, model=self.llm.name, thread_id=self.thread_id, step=step,
@@ -370,11 +370,23 @@ class Agent:
         self.pending = None
         self._apply_end(reason, message)
 
+    def _llm_error_message(self) -> str:
+        exc = self._last_llm_error
+        if exc is not None and getattr(exc, "retryable", True) is False:
+            text = str(exc)
+            if "insufficient_quota" in text or "no credits" in text.lower():
+                return ("The model provider refused the request: the account has no credits left. "
+                        "Add credits on the provider's billing page, then start again.")
+            return f"The model provider refused the request (not retried): {text[:200]}"
+        return "The model provider failed repeatedly."
+
     def _ask_llm(self, messages: list[dict], step: int) -> Optional[LLMResponse]:
+        self._last_llm_error: Optional[Exception] = None
         for attempt in range(1 + self.limits.llm_max_retries):
             try:
                 return tracing.complete(self.llm, SYSTEM_PROMPT, messages, self.tool_definitions, step=step)
             except Exception as exc:  # noqa: BLE001 - provider failures must not crash the loop
+                self._last_llm_error = exc
                 self.budget.record_llm_error()
                 self.log.log_event("llm_error", step=step, attempt=attempt + 1, error=f"{type(exc).__name__}: {exc}")
                 if getattr(exc, "retryable", True) is False:
