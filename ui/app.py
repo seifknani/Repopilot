@@ -19,12 +19,13 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+import agent.github_issues as gh  # noqa: E402
+import agent.llm as llm_provider  # noqa: E402
+from agent import tracing  # noqa: E402
 from agent.config import DEFAULT_LOG_DIR, DEFAULT_WORKSPACE, AgentConfig  # noqa: E402
-from agent.demo_scripts import SCENARIOS, build_script  # noqa: E402
 from agent.errors import ToolError  # noqa: E402
 from agent.executor import ToolExecutor  # noqa: E402
 from agent.gitutil import run_git  # noqa: E402
-from agent.llm import ScriptedLLM  # noqa: E402
 from agent.loop import Agent, RunStatus  # noqa: E402
 from agent.policy import Policy  # noqa: E402
 from agent.stop_rule import Limits  # noqa: E402
@@ -32,12 +33,16 @@ from sandbox.reset import REMOTE_ENV, ResetError, reset_workspace  # noqa: E402
 
 WORKSPACE = Path(os.environ.get("REPOPILOT_WORKSPACE", DEFAULT_WORKSPACE))
 LOG_DIR = Path(os.environ.get("REPOPILOT_LOG_DIR", DEFAULT_LOG_DIR))
+ISSUES = "GitHub issue"
 CUSTOM = "Custom report"
+
+llm_provider.load_dotenv(ROOT / ".env")  # LLM key, GITHUB_TOKEN, LangSmith settings (git-ignored)
 
 st.set_page_config(page_title="RepoPilot", layout="wide")
 state = st.session_state
 state.setdefault("agent", None)
 state.setdefault("flash", None)
+state.setdefault("issues", [])  # trusted task issues loaded from the target repo
 
 
 # --- helpers ---------------------------------------------------------------------------
@@ -88,19 +93,69 @@ def action_reset() -> None:
     flash("success", f"Sandbox reset ({source}). main @ {info['baseline_commit'][:10]}, on {info['work_branch']}.")
 
 
+def selected_issue() -> gh.Issue | None:
+    if state.get("source") != ISSUES:
+        return None
+    return next((i for i in state.issues if i.number == state.get("issue")), None)
+
+
+def action_load_issues() -> None:
+    repo = state.get("issues_repo", "").strip()
+    try:
+        client = gh.GitHubIssues(repo, gh.token_from_env())
+        state.issues = sorted(client.task_issues(), key=lambda i: i.number)
+    except gh.GitHubError as exc:
+        state.issues = []
+        flash("error", f"Could not load issues: {exc}")
+        return
+    if state.issues:
+        state.issue = state.issues[0].number
+        on_issue_change()
+        flash("success", f"Loaded {len(state.issues)} open task issue(s) from {client.repo}.")
+    else:
+        state.report = ""
+        flash("warning", f"No open task issues on {client.repo} (label 'repopilot', trusted author). "
+                         "Create them with scripts/seed_issues.py.")
+
+
 def action_start() -> None:
+    issue = selected_issue()
+    report = issue.as_bug_report() if issue else state.get("report", "").strip()
+    if state.get("source") == ISSUES and issue is None:
+        flash("error", "Load the issues and pick one first.")
+        return
+    if not report:
+        flash("error", "Write a bug report first.")
+        return
+    llm, pricing = llm_provider.llm_from_env(ROOT)
+    if llm is None:
+        flash("error", "No LLM provider configured. Set REPOPILOT_LLM_API_KEY (or GROQ_API_KEY) in .env.")
+        return
     if not workspace_ready():
         action_reset()
-    scenario = state.get("scenario")
-    if scenario == CUSTOM:
-        flash("error", "A custom report needs a real LLM provider, which is not connected yet. Pick a scripted bug.")
-        return
     limits = Limits(max_steps=int(state.get("max_steps", 20)), max_tool_calls=int(state.get("max_tool_calls", 40)))
-    log_path = LOG_DIR / f"run-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{scenario}.jsonl"
+    tag = f"issue-{issue.number}" if issue else "custom"
+    log_path = LOG_DIR / f"run-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{tag}.jsonl"
     executor = ToolExecutor(AgentConfig(workspace=WORKSPACE, log_path=log_path))
-    agent = Agent(executor, ScriptedLLM(build_script(scenario, remote=has_remote())), limits)
+    metadata = {"issue": issue.number, "issue_url": issue.url} if issue else {"source": "custom"}
+    agent = Agent(executor, llm, limits, pricing, run_metadata=metadata)
     state.agent = agent
-    agent.start(state.get("report", ""))
+    agent.start(report, issue_number=issue.number if issue else None)
+
+
+def action_comment_issue(number: int, pushed: dict) -> None:
+    """Human-triggered: link the pushed fix branch on the GitHub issue."""
+    agent = state.agent
+    body = (f"RepoPilot pushed a proposed fix on branch `{pushed['remote_branch']}` (approved by a human "
+            f"reviewer). Open a pull request: {pushed['web_url']}\n\nAgent summary:\n\n> "
+            + (agent.final_message if agent else "").strip().replace("\n", "\n> "))
+    try:
+        url = gh.GitHubIssues(state.get("issues_repo") or os.environ.get(REMOTE_ENV, ""),
+                              gh.token_from_env()).comment(number, body)
+    except gh.GitHubError as exc:
+        flash("error", f"Could not comment: {exc}")
+        return
+    flash("success", f"Commented on issue #{number}: {url}")
 
 
 def action_decide(approve: bool) -> None:
@@ -115,9 +170,16 @@ def action_stop() -> None:
         state.agent.stop("stopped from the UI")
 
 
-def on_scenario_change() -> None:
-    scenario = state.get("scenario")
-    state.report = SCENARIOS[scenario].report if scenario in SCENARIOS else ""
+def on_issue_change() -> None:
+    issue = selected_issue()
+    state.report = issue.as_bug_report() if issue else ""
+
+
+def on_source_change() -> None:
+    if state.get("source") == ISSUES:
+        on_issue_change()
+    else:
+        state.report = ""
 
 
 # --- process diagram -------------------------------------------------------------------
@@ -196,7 +258,12 @@ with st.sidebar:
         st.caption("No sandbox yet. It is created on the first reset or run.")
 
     st.header("Agent")
-    st.caption("LLM: **Scripted** (pre-recorded decisions per bug). Tools, tests, Git and approvals are real.")
+    model = os.environ.get("REPOPILOT_LLM_MODEL", llm_provider.DEFAULT_MODEL)
+    has_key = bool(os.environ.get("REPOPILOT_LLM_API_KEY") or os.environ.get("GROQ_API_KEY"))
+    st.caption(f"LLM: **{model}**" if has_key else "LLM: **not configured** (set an API key in .env)")
+    st.caption("Loop: **LangGraph** (plan → tools → human_review → apply_write)")
+    st.caption(f"LangSmith tracing: **on**, project `{tracing.tracing_project()}`" if tracing.tracing_enabled()
+               else "LangSmith tracing: off (LANGSMITH_TRACING=true + LANGSMITH_API_KEY to enable)")
     st.number_input("Max steps", 1, 50, 20, key="max_steps")
     st.number_input("Max tool calls", 1, 100, 40, key="max_tool_calls")
 
@@ -215,14 +282,21 @@ running = agent is not None and agent.status == RunStatus.AWAITING_APPROVAL
 
 left, right = st.columns([2, 3])
 with left:
-    st.subheader("1. Bug report")
-    options = list(SCENARIOS) + [CUSTOM]
-    if "scenario" not in state:
-        state.scenario = options[0]
-        state.report = SCENARIOS[options[0]].report
-    st.selectbox("Scenario", options, key="scenario", on_change=on_scenario_change,
-                 format_func=lambda k: f"{k} – {SCENARIOS[k].title}" if k in SCENARIOS else k, disabled=running)
-    st.text_area("Report (what the user sees)", key="report", height=110, disabled=running)
+    st.subheader("1. Task")
+    st.radio("Source", [ISSUES, CUSTOM], key="source", horizontal=True, on_change=on_source_change,
+             disabled=running)
+    if state.get("source", ISSUES) == ISSUES:
+        r1, r2 = st.columns([3, 1])
+        r1.text_input("Target repo", key="issues_repo", value=os.environ.get(REMOTE_ENV, ""),
+                      label_visibility="collapsed", placeholder="https://github.com/OWNER/NAME")
+        r2.button("Load issues", key="load_issues", on_click=action_load_issues, disabled=running, width="stretch")
+        numbers = [i.number for i in state.issues]
+        titles = {i.number: i.title for i in state.issues}
+        st.selectbox("Issue", numbers, key="issue", on_change=on_issue_change, disabled=running or not numbers,
+                     format_func=lambda n: f"#{n} – {titles.get(n, '')}", placeholder="Load the issues first")
+        st.text_area("Issue text (sent to the agent as untrusted data)", key="report", height=140, disabled=True)
+    else:
+        st.text_area("Bug report", key="report", height=140, disabled=running)
     c1, c2 = st.columns(2)
     c1.button("Start investigation", type="primary", on_click=action_start, key="start",
               disabled=running, width="stretch")
@@ -272,6 +346,10 @@ elif agent and agent.status in (RunStatus.DONE, RunStatus.STOPPED):
     if pushes:
         st.markdown(f"Fix published as branch `{pushes[-1]['data']['remote_branch']}`: "
                     f"[open a pull request on GitHub]({pushes[-1]['data']['web_url']})")
+        issue_no = (agent.run_metadata or {}).get("issue")
+        if issue_no and gh.token_from_env():
+            st.button(f"Comment on issue #{issue_no} with this branch", key="comment_issue",
+                      on_click=action_comment_issue, args=(issue_no, pushes[-1]["data"]))
 
 # --- details ---------------------------------------------------------------------------
 tabs = st.tabs(["Timeline", "Files read", "Tests", "Git", "Repository", "Raw log"])

@@ -1,2 +1,4 @@
 -r task_api/requirements.txt
 streamlit>=1.50
+langgraph>=1.2,<2
+langsmith>=0.15,<1

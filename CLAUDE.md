@@ -16,7 +16,8 @@ maintenance agent that investigates and fixes real bugs in our own Task Manageme
 - For every step: explain what is being built, list files created/modified, write complete
   code, give exact commands, run the tests, verify before moving on.
 - Keep it small: Python, FastAPI, SQLite, pytest, Pydantic, Git, Streamlit.
-  No Docker, no multi-agent systems, no extra frameworks.
+  No Docker, no multi-agent systems. Exception approved by the user (2026-11-18): LangGraph for the
+  loop and LangSmith for tracing.
 - Commit after each verified step with a clear message, then push to `origin main`.
 - No real credentials in the repo (API keys come from environment variables or a git-ignored `.env`).
 
@@ -24,8 +25,10 @@ maintenance agent that investigates and fixes real bugs in our own Task Manageme
 - `task_api/` – pristine **source** of the target app (currently contains the 5 bugs)
 - `sandbox/reset.py` – copies `task_api/` → `sandbox/workspace/` (git-ignored), runs `git init`,
   makes a baseline commit on `main`, and checks out the work branch `repopilot/work`
-- `agent/` – tools, schemas, policy, approvals, executor, logging, stop_rule, llm (ScriptedLLM), loop
-- `tests/` – tests for the agent and the sandbox (root `pytest.ini`, 231 tests, all must pass; ~5 min)
+- `agent/` – tools, schemas, policy, approvals, executor, logging, stop_rule, llm, loop (LangGraph graph),
+  tracing (LangSmith), github_issues (issues = tasks)
+- `scripts/` – `seed_issues.py` (open `issues.json` as GitHub issues), `run_issue.py` (agent on an issue, real LLM)
+- `tests/` – tests for the agent and the sandbox (root `pytest.ini`, 257 tests, all must pass; ~8 min)
 - `ui/app.py` – Streamlit UI: process diagram, timeline, approvals, tests, git, repo browser, raw log
 - `eval/` – `bugs.md` (answer key), `scenarios.py` (32 scenarios), `run_eval.py` (metrics M1–M10),
   `results/` (committed summaries). Run: `.venv/Scripts/python -m eval.run_eval [--llm env]`
@@ -38,6 +41,8 @@ python -m venv .venv
 .venv/Scripts/python sandbox/reset.py                 # (re)build the sandbox workspace
 .venv/Scripts/python -m pytest                        # agent + sandbox + UI tests (root)
 .venv/Scripts/python -m streamlit run ui/app.py      # UI on http://localhost:8501 (localhost only)
+.venv/Scripts/python scripts/seed_issues.py --dry-run # preview/create task issues (needs GITHUB_TOKEN)
+.venv/Scripts/python scripts/run_issue.py --list     # then --issue N / --next (needs an LLM key)
 cd task_api && ../.venv/Scripts/python -m pytest      # target app tests (13 fail by design)
 ```
 Note: `task_api/pytest.ini` already sets `-q`; don't add another `-q` there, or the
@@ -74,6 +79,14 @@ summary line disappears.
 - A Contributions section: split the project into 4 parts with subtasks and assign one part to each
   team member: Seifeddine Knani, Mohamed Amine Zouaoui, Walid Fakhfakh, Alaaeddine Bousselmi.
   Purpose: each member knows which part to revise so they can answer questions at the demo.
+
+## Agent runtime (since 2026-11-18, user request)
+- Loop = LangGraph StateGraph (plan → tools → human_review[interrupt] → apply_write → plan; finish).
+  LangSmith tracing via LANGSMITH_* env vars (off by default, forced off in tests).
+- Tasks come from GitHub issues on the target repo (label `repopilot`, trusted authors), not from
+  hand-written bug reports. ScriptedLLM/demo_scripts are test doubles + eval baseline only.
+- Real runs still need: GITHUB_TOKEN (to seed issues), LANGSMITH_API_KEY, and an LLM that fits the
+  request size (Groq free tier returned HTTP 413 in logs/eval/groq-probe).
 
 ## Open decisions
 - LLM provider: OpenAI-compatible adapter exists (Groq default). User asked (2026-11-18) about Claude:

@@ -1,10 +1,16 @@
 """Fixtures for agent and sandbox tests. Every test gets its own real sandbox Git repo."""
 from __future__ import annotations
 
+import os
 import shutil
 from pathlib import Path
 
 import pytest
+
+# Tests never send traces to LangSmith, even if the developer's .env enables tracing
+# (load_dotenv never overrides variables that are already set).
+os.environ["LANGSMITH_TRACING"] = "false"
+os.environ["LANGCHAIN_TRACING_V2"] = "false"
 
 from agent.config import AgentConfig
 from agent.executor import ToolExecutor

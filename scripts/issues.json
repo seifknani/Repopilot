@@ -1,0 +1,27 @@
+[
+  {
+    "key": "BUG-1",
+    "title": "Filtering by status returns every task except the ones I asked for",
+    "body": "### What happens\nWhen I filter the task list by status, I get the opposite of what I asked for.\n\n### Steps to reproduce\n1. `POST /tasks` with `{\"title\": \"a\", \"status\": \"pending\"}`\n2. `POST /tasks` with `{\"title\": \"b\", \"status\": \"completed\"}`\n3. `POST /tasks` with `{\"title\": \"c\", \"status\": \"in_progress\"}`\n4. `GET /tasks?status=pending`\n\n### Expected\nOnly task `a`.\n\n### Actual\nTasks `b` and `c` are returned, and `a` is missing.\n\n### Environment\nLatest `main`, SQLite storage."
+  },
+  {
+    "key": "BUG-2",
+    "title": "Priority filter is ignored unless a status filter is also given",
+    "body": "### What happens\n`GET /tasks?priority=high` returns all tasks, including low and medium priority ones.\n\n### Steps to reproduce\n1. Create one task with `\"priority\": \"high\"` and one with `\"priority\": \"low\"`.\n2. `GET /tasks?priority=high`\n\n### Expected\nOnly the high-priority task.\n\n### Actual\nBoth tasks are returned. Oddly, `GET /tasks?status=pending&priority=high` does filter by priority."
+  },
+  {
+    "key": "BUG-3",
+    "title": "PATCH with a single field returns 500 Internal Server Error",
+    "body": "### What happens\nI can't mark a task as completed without resending every field.\n\n### Steps to reproduce\n1. `POST /tasks` with `{\"title\": \"write report\"}` -> id 1\n2. `PATCH /tasks/1` with `{\"status\": \"completed\"}`\n\n### Expected\n200 and the task with `status: completed`; the other fields are unchanged.\n\n### Actual\n500 Internal Server Error. It works only if I send title, status and priority together."
+  },
+  {
+    "key": "BUG-4",
+    "title": "A task title made only of spaces is accepted",
+    "body": "### What happens\nThe API accepts a blank title.\n\n### Steps to reproduce\n`POST /tasks` with `{\"title\": \"   \"}`\n\n### Expected\n422 Unprocessable Entity: a title must not be blank.\n\n### Actual\n201 Created, and the task is stored with an empty title `\"\"`."
+  },
+  {
+    "key": "BUG-5",
+    "title": "PATCH on a task that does not exist returns 500 instead of 404",
+    "body": "### What happens\nUpdating a missing task crashes the server.\n\n### Steps to reproduce\n`PATCH /tasks/9999` with `{\"title\": \"x\"}` on an empty database.\n\n### Expected\n404 Not Found, the same as `GET /tasks/9999` and `DELETE /tasks/9999`.\n\n### Actual\n500 Internal Server Error."
+  }
+]

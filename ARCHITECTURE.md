@@ -197,6 +197,9 @@ decision keyed on that id, so a repeated call with the same id is a no-op.
 
 ### 2.2 Agent loop and stop rule (implemented in step 10)
 
+> Since 2026-11-18 the loop runs as a **LangGraph** state machine (§2.5). The behaviour below
+> (stop rule, checkpoint, time accounting) is unchanged and is enforced by the same tests.
+
 `agent/loop.py` – `Agent.start(bug_report)` → `RunResult`; `Agent.decide(proposal_id, approve, note)`;
 `Agent.stop()`.
 
@@ -284,3 +287,38 @@ Layers: `main.py` (HTTP only) → `service.py` (business rules, errors) →
   env access or test skipping, remove many lines, or contain instruction-like text are flagged to the reviewer.
 - Details and results: `errors.md` (E1–E18, a test per class) and `threat_model.md` (INJ-1 … INJ-7).
 
+### 2.5 LangGraph loop, LangSmith tracing, GitHub issues as tasks (2026-11-18)
+
+**Loop** (`agent/loop.py`): a LangGraph `StateGraph` compiled with an in-memory checkpointer.
+
+```
+START → plan ─(tool calls)→ tools ─(proposal pending)→ human_review ─(approve)→ apply_write → plan
+          │                  │ └─(no proposal)→ plan            └─(reject)→ plan
+          └─(answer / stop)→ finish → END     (tools → finish when a limit is hit)
+```
+
+- `plan` = PLAN (one LLM turn; the stop rule is checked first). `tools` = TOOL CALL + OBSERVE.
+- `human_review` calls LangGraph `interrupt()`: the graph pauses with its state checkpointed, and
+  `Agent.decide()` resumes it with `Command(resume=...)`. Nothing before `interrupt()` has side effects.
+- `apply_write` is the orchestrator's approved write (apply/commit/push + automatic tests).
+- The graph state holds the messages, the pending proposal, the decision, and the stop reason. The
+  `Budget` stays on the `Agent` (a runtime resource). `recursion_limit` = 4·max_steps + 2·max_tool_calls + 10
+  is only a backstop; the stop rule always ends the run first (`tests/test_graph.py`).
+- The public API (`start`, `decide`, `stop`, `result`, `messages`) is unchanged, so the eval and all tests run on the graph.
+
+**Tracing** (`agent/tracing.py`): LangSmith, enabled by `LANGSMITH_TRACING=true` + `LANGSMITH_API_KEY`
+(`LANGSMITH_PROJECT`, default `repopilot` in `.env.example`). Each graph invocation (start and each resume)
+is one trace with the node runs, an `llm` run per model call (with token usage, model name, and step), and
+a `tool` run per tool call (actor agent/system/human). All of them share `metadata.thread_id`, so LangSmith
+groups a whole task into one thread; `metadata.issue` holds the issue number. The tests force tracing off.
+
+**Tasks = GitHub issues** (`agent/github_issues.py`): the agent no longer runs on hand-written scripts.
+- `scripts/seed_issues.py` opens the symptom-only reports in `scripts/issues.json` as issues labelled
+  `repopilot` on the target repo (idempotent by title; `--dry-run`). Needs `GITHUB_TOKEN`.
+- `scripts/run_issue.py --list | --next | --issue N` fetches a trusted issue, rebuilds the sandbox
+  (cloned from the target repo, or `--local`), runs the LangGraph agent with the real LLM from `.env`,
+  asks for each approval in the terminal, and after a pushed fix offers to comment on the issue.
+- The UI's task source is a GitHub issue (Load issues) or a custom report, always with the real LLM.
+- Trust gate: label `repopilot` + author `OWNER`/`MEMBER`/`COLLABORATOR` (see `threat_model.md`).
+- `ScriptedLLM` and `agent/demo_scripts.py` remain only as deterministic test doubles and as the
+  eval's scripted baseline. They are not reachable from the UI or the issue runner.
