@@ -26,7 +26,9 @@ EXIT_MEANING = {
 
 
 def run_tests(ctx: ToolContext, inp: RunTestsInput) -> ToolOutput:
-    cmd = [sys.executable, "-m", "pytest", "-p", "no:cacheprovider", "-rfE", "--tb=short", "--color=no"]
+    # --disable-warnings: the warnings summary is noise for the model, and every token is paid for.
+    cmd = [sys.executable, "-m", "pytest", "-p", "no:cacheprovider", "-rfE", "--tb=short", "--color=no",
+           "--disable-warnings"]
     if inp.target:
         ctx.policy.resolve(inp.target.split("::", 1)[0], kind="file")
         cmd.append(inp.target)

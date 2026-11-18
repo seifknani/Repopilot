@@ -48,6 +48,7 @@ def app(workspace, tmp_path, monkeypatch, fake_llm):
     monkeypatch.setenv("REPOPILOT_WORKSPACE", str(workspace))
     monkeypatch.setenv("REPOPILOT_LOG_DIR", str(tmp_path / "logs"))
     monkeypatch.setenv("REPOPILOT_TARGET_REMOTE", "https://github.com/o/r")
+    monkeypatch.setenv("REPOPILOT_SPEND_LEDGER", str(tmp_path / "spend.jsonl"))  # never the real ledger
     at = AppTest.from_file(APP, default_timeout=120)
     at.run()
     assert not at.exception

@@ -37,6 +37,7 @@ from agent.executor import ToolExecutor  # noqa: E402
 from agent.github_issues import GitHubError, GitHubIssues, Issue, token_from_env  # noqa: E402
 from agent.llm import llm_from_env, load_dotenv  # noqa: E402
 from agent.loop import Agent, RunStatus  # noqa: E402
+from agent.spend import SpendLedger, ledger_from_env  # noqa: E402
 from agent.stop_rule import Limits  # noqa: E402
 from sandbox.reset import REMOTE_ENV, ResetError, reset_workspace  # noqa: E402
 
@@ -96,13 +97,14 @@ def pushed_branch(agent: Agent) -> Optional[dict]:
 
 
 def run(issue: Issue, *, llm, pricing, workspace: Path, remote: Optional[str], limits: Limits,
-        ask: Ask = input, out=print, log_dir: Path = DEFAULT_LOG_DIR, return_agent: bool = False):
+        ask: Ask = input, out=print, log_dir: Path = DEFAULT_LOG_DIR, return_agent: bool = False,
+        ledger: Optional[SpendLedger] = None):
     info = reset_workspace(workspace, remote_url=remote)
     out(f"Sandbox: {info['workspace']} ({'cloned from ' + remote if remote else 'local copy'}), "
         f"on {info['work_branch']}")
     log_path = log_dir / f"run-{datetime.now().strftime('%Y%m%d-%H%M%S')}-issue-{issue.number}.jsonl"
     executor = ToolExecutor(AgentConfig(workspace=workspace, log_path=log_path))
-    agent = Agent(executor, llm, limits, pricing,
+    agent = Agent(executor, llm, limits, pricing, ledger=ledger,
                   run_metadata={"issue": issue.number, "issue_url": issue.url, "repo_remote": remote or "local"})
     out(f"Model: {llm.name} | LangSmith tracing: "
         + (f"on (project '{tracing.tracing_project()}', thread {agent.thread_id})" if tracing.tracing_enabled() else "off"))
@@ -117,7 +119,10 @@ def run(issue: Issue, *, llm, pricing, workspace: Path, remote: Optional[str], l
     out(f"Run finished: {result.stop_reason.value}\n{result.final_message}")
     m = result.metrics
     out(f"steps {m['steps']} | tool calls {m['tool_calls']} ({m['failed_tool_calls']} failed) | "
-        f"tokens {m['tokens']:,} | cost ${m['cost_usd']:.4f} | agent time {m['elapsed_s']:.1f}s")
+        f"tokens {m['tokens']:,} ({m['cached_input_tokens']:,} cached) | cost ${m['cost_usd']:.4f} | "
+        f"agent time {m['elapsed_s']:.1f}s")
+    if ledger is not None:
+        out(f"Team LLM budget: {ledger.summary()}")
     out(f"Trajectory log: {log_path}")
     return (result, agent) if return_agent else result
 
@@ -134,6 +139,8 @@ def main(argv: list[str] | None = None, ask: Ask = input) -> int:
     parser.add_argument("--workspace", type=Path, default=Path(os.environ.get("REPOPILOT_WORKSPACE", DEFAULT_WORKSPACE)))
     parser.add_argument("--max-steps", type=int, default=20)
     parser.add_argument("--max-tool-calls", type=int, default=40)
+    parser.add_argument("--max-cost", type=float, default=float(os.environ.get("REPOPILOT_MAX_COST_PER_RUN") or 0.25),
+                        help="USD limit for this run (default $REPOPILOT_MAX_COST_PER_RUN or 0.25).")
     args = parser.parse_args(argv)
     if not args.repo:
         print(f"No target repo: pass --repo or set {REMOTE_ENV}.", file=sys.stderr)
@@ -171,12 +178,18 @@ def main(argv: list[str] | None = None, ask: Ask = input) -> int:
     if llm is None:
         print("No LLM configured. Set REPOPILOT_LLM_API_KEY (or GROQ_API_KEY) in .env.", file=sys.stderr)
         return 2
+    ledger = ledger_from_env(ROOT)
+    if ledger.exhausted():
+        print(f"The team LLM budget is used up: {ledger.summary()}. Raise REPOPILOT_BUDGET_USD to continue.",
+              file=sys.stderr)
+        return 2
     remote = None if args.local else (args.repo if args.repo.startswith(("https://", "git@")) else
                                       f"https://github.com/{github.repo}.git")
     try:
         agent_result, agent = run(issue, llm=llm, pricing=pricing, workspace=args.workspace, remote=remote,
-                                  limits=Limits(max_steps=args.max_steps, max_tool_calls=args.max_tool_calls),
-                                  ask=ask, return_agent=True)
+                                  limits=Limits(max_steps=args.max_steps, max_tool_calls=args.max_tool_calls,
+                                                max_cost_usd=args.max_cost),
+                                  ask=ask, return_agent=True, ledger=ledger)
         offer_issue_comment(github, issue, agent, ask)
     except ResetError as exc:
         print(f"Sandbox reset failed: {exc}", file=sys.stderr)

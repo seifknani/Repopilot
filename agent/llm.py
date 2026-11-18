@@ -18,6 +18,13 @@ from typing import Any, Callable, Optional, Protocol, Union
 class LLMError(Exception):
     """The model provider failed (network, rate limit, invalid response...)."""
 
+    def __init__(self, message: str, *, retryable: bool = True) -> None:
+        super().__init__(message)
+        self.retryable = retryable  # False: retrying cannot help (no credits, bad key) - stop at once
+
+
+NON_RETRYABLE_CODES = ("insufficient_quota", "invalid_api_key", "billing_hard_limit_reached")
+
 
 @dataclass
 class ToolCall:
@@ -34,6 +41,7 @@ class LLMResponse:
     output_tokens: int = 0
     usage_estimated: bool = False
     cached_input_tokens: int = 0  # part of input_tokens served from the provider's prompt cache
+    reasoning_tokens: int = 0  # part of output_tokens spent on hidden reasoning (billed as output)
 
 
 class LLMClient(Protocol):
@@ -121,6 +129,28 @@ import httpx  # noqa: E402
 
 DEFAULT_BASE_URL = "https://api.groq.com/openai/v1"
 DEFAULT_MODEL = "openai/gpt-oss-120b"
+OPENAI_BASE_URL = "https://api.openai.com/v1"
+OPENAI_DEFAULT_MODEL = "gpt-5-mini"
+
+# USD per million tokens: (input, cached input, output), standard tier.
+# Source: https://developers.openai.com/api/docs/pricing (checked 2026-11-18).
+# Flex tier (service_tier="flex") is half price for the models that support it.
+MODEL_PRICES: dict[str, tuple[float, float, float]] = {
+    "gpt-5-nano": (0.05, 0.005, 0.40),
+    "gpt-5-mini": (0.25, 0.025, 2.00),
+    "gpt-5.4-nano": (0.20, 0.02, 1.25),
+    "gpt-5.4-mini": (0.75, 0.075, 4.50),
+    "gpt-5.6-luna": (0.20, 0.02, 1.20),
+    "gpt-4.1-mini": (0.40, 0.10, 1.60),
+    "gpt-4o-mini": (0.15, 0.075, 0.60),
+}
+FLEX_MODELS = frozenset({"gpt-5-nano", "gpt-5-mini", "gpt-5.4-mini", "gpt-5.6-luna"})
+
+
+def is_reasoning_model(model: str) -> bool:
+    """gpt-5* and o-series models reject a custom temperature and spend output tokens on reasoning."""
+    name = model.split("/")[-1]
+    return name.startswith(("gpt-5", "o1", "o3", "o4"))
 
 
 def to_openai_messages(system: str, messages: list[dict]) -> list[dict]:
@@ -151,15 +181,20 @@ def to_openai_tools(tools: list[dict]) -> list[dict]:
 class OpenAICompatibleLLM:
     """Calls a chat-completions endpoint with tool calling and reports the real token usage."""
 
-    def __init__(self, model: str, api_key: str, base_url: str = DEFAULT_BASE_URL, *, temperature: float = 0.0,
-                 max_output_tokens: int = 2048, timeout_s: float = 90.0, rate_limit_retries: int = 4,
+    def __init__(self, model: str, api_key: str, base_url: str = DEFAULT_BASE_URL, *,
+                 temperature: Optional[float] = 0.0, max_output_tokens: int = 2048,
+                 reasoning_effort: Optional[str] = None, service_tier: Optional[str] = None,
+                 prompt_cache_key: Optional[str] = None, timeout_s: float = 90.0, rate_limit_retries: int = 4,
                  max_wait_s: float = 60.0, transport: Optional[httpx.BaseTransport] = None,
                  sleep: Callable[[float], None] = time.sleep) -> None:
         if not api_key:
             raise LLMError("No API key configured for the LLM provider.")
         self.name = model
-        self.temperature = temperature
+        self.temperature = temperature  # None = provider default (required by reasoning models)
         self.max_output_tokens = max_output_tokens
+        self.reasoning_effort = reasoning_effort  # "minimal" | "low" | "medium" | "high" (reasoning models)
+        self.service_tier = service_tier  # "flex" = half price, slower (OpenAI)
+        self.prompt_cache_key = prompt_cache_key  # same key + same prefix -> more cache hits (OpenAI)
         self.rate_limit_retries = rate_limit_retries
         self.max_wait_s = max_wait_s
         self.sleep = sleep
@@ -168,15 +203,29 @@ class OpenAICompatibleLLM:
                                    headers={"Authorization": f"Bearer {api_key}"})
 
     def complete(self, system: str, messages: list[dict], tools: list[dict]) -> LLMResponse:
-        payload = {
-            "model": self.name, "temperature": self.temperature, "max_tokens": self.max_output_tokens,
+        # The prefix (system prompt + tool schemas + earlier messages) never changes during a run, so
+        # providers with prompt caching bill it at the cached-input rate from the second call on.
+        payload: dict[str, Any] = {
+            "model": self.name, "max_completion_tokens": self.max_output_tokens,
             "messages": to_openai_messages(system, messages), "tools": to_openai_tools(tools), "tool_choice": "auto",
         }
+        if self.temperature is not None:
+            payload["temperature"] = self.temperature
+        if self.reasoning_effort:
+            payload["reasoning_effort"] = self.reasoning_effort
+        if self.service_tier:
+            payload["service_tier"] = self.service_tier
+        if self.prompt_cache_key:
+            payload["prompt_cache_key"] = self.prompt_cache_key
         for attempt in range(self.rate_limit_retries + 1):
             try:
                 response = self.client.post("/chat/completions", json=payload)
             except httpx.HTTPError as exc:
                 raise LLMError(f"Network error calling the LLM: {type(exc).__name__}") from exc
+            if response.status_code in (401, 429) and any(c in response.text for c in NON_RETRYABLE_CODES):
+                # No credits / spending limit / bad key: waiting will not help, and retries cost time.
+                raise LLMError(f"LLM provider refused the request (HTTP {response.status_code}, account problem): "
+                               f"{response.text[:300]}", retryable=False)
             if response.status_code == 429 and attempt < self.rate_limit_retries:
                 # Free tiers limit tokens per minute: wait as instructed, then retry the same request.
                 try:
@@ -206,6 +255,7 @@ class OpenAICompatibleLLM:
                                   id=tc.get("id") or f"call_{i}"))
         usage = body.get("usage") or {}
         cached = (usage.get("prompt_tokens_details") or {}).get("cached_tokens") or 0
+        reasoning = (usage.get("completion_tokens_details") or {}).get("reasoning_tokens") or 0
         return LLMResponse(
             text=message.get("content") or "",
             tool_calls=calls,
@@ -213,6 +263,7 @@ class OpenAICompatibleLLM:
             output_tokens=int(usage.get("completion_tokens") or 0),
             usage_estimated=not usage,
             cached_input_tokens=int(cached),
+            reasoning_tokens=int(reasoning),
         )
 
 
@@ -227,23 +278,62 @@ def load_dotenv(path: Path) -> None:
             os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
+def pricing_for(model: str, service_tier: Optional[str] = None):
+    """Pricing from REPOPILOT_LLM_PRICE_* if set, else from MODEL_PRICES (halved for flex)."""
+    from agent.stop_rule import Pricing  # local import: stop_rule does not depend on llm
+
+    known = MODEL_PRICES.get(model.split("/")[-1])
+    env_in, env_out = os.environ.get("REPOPILOT_LLM_PRICE_IN"), os.environ.get("REPOPILOT_LLM_PRICE_OUT")
+    env_cached = os.environ.get("REPOPILOT_LLM_PRICE_CACHED")
+    if env_in or env_out:
+        price_in, price_out = float(env_in or 0), float(env_out or 0)
+        price_cached = float(env_cached) if env_cached else price_in
+    elif known:
+        price_in, price_cached, price_out = known
+        if service_tier == "flex":
+            price_in, price_cached, price_out = price_in / 2, price_cached / 2, price_out / 2
+    else:
+        price_in = price_cached = price_out = 0.0
+    return Pricing(model=model, input_per_mtok=price_in, output_per_mtok=price_out,
+                   cached_input_per_mtok=price_cached)
+
+
 def llm_from_env(project_root: Optional[Path] = None):
     """Build the real LLM and its Pricing from environment variables (or a git-ignored .env).
 
-    REPOPILOT_LLM_API_KEY (or GROQ_API_KEY), REPOPILOT_LLM_MODEL, REPOPILOT_LLM_BASE_URL,
-    REPOPILOT_LLM_PRICE_IN / REPOPILOT_LLM_PRICE_OUT (USD per million tokens).
+    Key: REPOPILOT_LLM_API_KEY, else OPENAI_API_KEY (OpenAI defaults), else GROQ_API_KEY (Groq defaults).
+    Optional: REPOPILOT_LLM_MODEL, REPOPILOT_LLM_BASE_URL, REPOPILOT_LLM_REASONING_EFFORT (default "low"
+    for reasoning models on OpenAI), REPOPILOT_LLM_SERVICE_TIER ("flex" = half price on OpenAI),
+    REPOPILOT_LLM_MAX_OUTPUT_TOKENS (default 2048), REPOPILOT_LLM_TEMPERATURE,
+    REPOPILOT_LLM_PRICE_IN / _CACHED / _OUT (USD per million tokens; default: MODEL_PRICES).
     Returns (None, None) when no key is configured.
     """
-    from agent.stop_rule import Pricing  # local import: stop_rule does not depend on llm
-
     if project_root is not None:
         load_dotenv(project_root / ".env")
-    key = os.environ.get("REPOPILOT_LLM_API_KEY") or os.environ.get("GROQ_API_KEY")
-    if not key:
+    env = os.environ
+    if env.get("REPOPILOT_LLM_API_KEY"):
+        key, base, model = env["REPOPILOT_LLM_API_KEY"], DEFAULT_BASE_URL, DEFAULT_MODEL
+    elif env.get("OPENAI_API_KEY"):
+        key, base, model = env["OPENAI_API_KEY"], OPENAI_BASE_URL, OPENAI_DEFAULT_MODEL
+    elif env.get("GROQ_API_KEY"):
+        key, base, model = env["GROQ_API_KEY"], DEFAULT_BASE_URL, DEFAULT_MODEL
+    else:
         return None, None
-    model = os.environ.get("REPOPILOT_LLM_MODEL", DEFAULT_MODEL)
-    pricing = Pricing(model=model,
-                      input_per_mtok=float(os.environ.get("REPOPILOT_LLM_PRICE_IN", "0")),
-                      output_per_mtok=float(os.environ.get("REPOPILOT_LLM_PRICE_OUT", "0")))
-    llm = OpenAICompatibleLLM(model, key, os.environ.get("REPOPILOT_LLM_BASE_URL", DEFAULT_BASE_URL))
-    return llm, pricing
+    model = env.get("REPOPILOT_LLM_MODEL") or model
+    base = env.get("REPOPILOT_LLM_BASE_URL") or base
+    is_openai = "api.openai.com" in base
+    reasoning = is_reasoning_model(model)
+    temperature_env = env.get("REPOPILOT_LLM_TEMPERATURE")
+    temperature = float(temperature_env) if temperature_env else (None if reasoning else 0.0)
+    effort = env.get("REPOPILOT_LLM_REASONING_EFFORT") or ("low" if reasoning and is_openai else None)
+    tier = (env.get("REPOPILOT_LLM_SERVICE_TIER") or None) if is_openai else None
+    if tier == "flex" and model.split("/")[-1] not in FLEX_MODELS:
+        tier = None  # flex is not offered for this model: use the standard tier
+    llm = OpenAICompatibleLLM(
+        model, key, base, temperature=temperature,
+        max_output_tokens=int(env.get("REPOPILOT_LLM_MAX_OUTPUT_TOKENS") or 2048),
+        reasoning_effort=effort, service_tier=tier,
+        prompt_cache_key="repopilot-v1" if is_openai else None,
+        timeout_s=600.0 if tier == "flex" else 120.0,  # flex requests can wait in a queue
+    )
+    return llm, pricing_for(model, tier)

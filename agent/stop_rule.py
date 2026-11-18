@@ -61,9 +61,13 @@ class Pricing:
     model: str = "scripted"
     input_per_mtok: float = 0.0
     output_per_mtok: float = 0.0
+    cached_input_per_mtok: Optional[float] = None  # prompt-cache hits; None = same as input
 
-    def cost(self, input_tokens: int, output_tokens: int) -> float:
-        return (input_tokens * self.input_per_mtok + output_tokens * self.output_per_mtok) / 1_000_000
+    def cost(self, input_tokens: int, output_tokens: int, cached_input_tokens: int = 0) -> float:
+        cached = min(max(0, cached_input_tokens), input_tokens)
+        cached_rate = self.input_per_mtok if self.cached_input_per_mtok is None else self.cached_input_per_mtok
+        return ((input_tokens - cached) * self.input_per_mtok + cached * cached_rate
+                + output_tokens * self.output_per_mtok) / 1_000_000
 
 
 class Budget:
@@ -77,6 +81,7 @@ class Budget:
         self.consecutive_failures = 0
         self.input_tokens = 0
         self.output_tokens = 0
+        self.cached_input_tokens = 0
         self.llm_errors = 0
         self.active_seconds = 0.0
         self._segment_start: Optional[float] = None
@@ -103,7 +108,7 @@ class Budget:
 
     @property
     def cost_usd(self) -> float:
-        return self.pricing.cost(self.input_tokens, self.output_tokens)
+        return self.pricing.cost(self.input_tokens, self.output_tokens, self.cached_input_tokens)
 
     # --- checks ------------------------------------------------------------------------
     def _resource_check(self) -> Optional[StopReason]:
@@ -126,9 +131,10 @@ class Budget:
         self.steps += 1
         return self.steps
 
-    def record_llm(self, input_tokens: int, output_tokens: int) -> Optional[StopReason]:
+    def record_llm(self, input_tokens: int, output_tokens: int, cached_input_tokens: int = 0) -> Optional[StopReason]:
         self.input_tokens += max(0, int(input_tokens))
         self.output_tokens += max(0, int(output_tokens))
+        self.cached_input_tokens += min(max(0, int(cached_input_tokens)), max(0, int(input_tokens)))
         return self._resource_check()
 
     def record_llm_error(self) -> None:
@@ -163,6 +169,7 @@ class Budget:
             "failed_tool_calls": self.failed_tool_calls,
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
+            "cached_input_tokens": self.cached_input_tokens,
             "tokens": self.tokens,
             "cost_usd": round(self.cost_usd, 6),
             "elapsed_s": round(self.elapsed, 3),

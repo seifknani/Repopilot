@@ -322,3 +322,18 @@ groups a whole task into one thread; `metadata.issue` holds the issue number. Th
 - Trust gate: label `repopilot` + author `OWNER`/`MEMBER`/`COLLABORATOR` (see `threat_model.md`).
 - `ScriptedLLM` and `agent/demo_scripts.py` remain only as deterministic test doubles and as the
   eval's scripted baseline. They are not reachable from the UI or the issue runner.
+
+### 2.6 Model and cost controls (2026-11-18)
+
+- Model: OpenAI `gpt-5-mini` via the OpenAI-compatible adapter (`agent/llm.py`): `max_completion_tokens`,
+  no temperature for reasoning models, `reasoning_effort=low`, optional `service_tier=flex` (half price),
+  fixed `prompt_cache_key`. Usage records cached input and reasoning tokens.
+- Pricing: `MODEL_PRICES` (input / cached input / output per 1M tokens); `Pricing.cost` bills cached input at
+  the cached rate, so `max_cost` reflects the real bill.
+- Smaller prompts: the baseline test run reaches the model as summary + failing ids (no pytest log), and
+  pytest runs with `--disable-warnings`.
+- Caps: `max_cost_usd` $0.25 per real run (UI, issue runner, eval `--llm env`); team ledger
+  (`agent/spend.py`, `logs/spend.jsonl`, `REPOPILOT_BUDGET_USD`=18) checked before every model call;
+  account errors (`insufficient_quota`, invalid key) are not retried.
+- Estimate (scripted REP trajectories, 600 output tokens/step assumed): ~7 calls, ~27k input tokens
+  (~78% cached) per task → ~$0.010/task with gpt-5-mini, ~$0.005 on flex; 32-scenario eval ≈ $0.33.

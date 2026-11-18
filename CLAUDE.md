@@ -28,7 +28,7 @@ maintenance agent that investigates and fixes real bugs in our own Task Manageme
 - `agent/` – tools, schemas, policy, approvals, executor, logging, stop_rule, llm, loop (LangGraph graph),
   tracing (LangSmith), github_issues (issues = tasks)
 - `scripts/` – `seed_issues.py` (open `issues.json` as GitHub issues), `run_issue.py` (agent on an issue, real LLM)
-- `tests/` – tests for the agent and the sandbox (root `pytest.ini`, 257 tests, all must pass; ~8 min)
+- `tests/` – tests for the agent and the sandbox (root `pytest.ini`, 268 tests, all must pass; ~9 min)
 - `ui/app.py` – Streamlit UI: process diagram, timeline, approvals, tests, git, repo browser, raw log
 - `eval/` – `bugs.md` (answer key), `scenarios.py` (32 scenarios), `run_eval.py` (metrics M1–M10),
   `results/` (committed summaries). Run: `.venv/Scripts/python -m eval.run_eval [--llm env]`
@@ -85,11 +85,13 @@ summary line disappears.
   LangSmith tracing via LANGSMITH_* env vars (off by default, forced off in tests).
 - Tasks come from GitHub issues on the target repo (label `repopilot`, trusted authors), not from
   hand-written bug reports. ScriptedLLM/demo_scripts are test doubles + eval baseline only.
-- Real runs still need: GITHUB_TOKEN (to seed issues), LANGSMITH_API_KEY, and an LLM that fits the
-  request size (Groq free tier returned HTTP 413 in logs/eval/groq-probe).
+- Real runs still need: OpenAI credits, GITHUB_TOKEN (to seed issues), LANGSMITH_API_KEY.
+- Team guide (user-facing, outside the repo): ../RepoPilot_Team_Guide.pdf, source ../RepoPilot_Team_Guide.html
+  (render with Edge headless --print-to-pdf). Updated 2026-11-18.
 
 ## Open decisions
-- LLM provider: OpenAI-compatible adapter exists (Groq default). User asked (2026-11-18) about Claude:
-  answered yes, needs an `AnthropicLLM` adapter with the official `anthropic` SDK + a paid key; awaiting
-  their choice of provider/model and key. No key is configured on this machine yet.
+- LLM provider (decided 2026-11-18): OpenAI `gpt-5-mini`, reasoning_effort=low, key in git-ignored `.env`
+  (OPENAI_API_KEY). Team budget is $20 for the semester: per-run cap $0.25, ledger cap $18
+  (`agent/spend.py`, logs/spend.jsonl). Estimated ~$0.01 per repair task with prompt caching.
+  The account had NO CREDITS on 2026-11-18 (HTTP 429 insufficient_quota): no real-model run yet.
 - Instructor approval of the RepoPilot idea is needed by the end of Week 11 (PDF p.6).

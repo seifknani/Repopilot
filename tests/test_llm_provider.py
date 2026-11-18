@@ -1,5 +1,6 @@
 """The real-provider adapter, tested offline with an HTTP mock (no key, no network, no cost)."""
 import json
+import os
 
 import httpx
 import pytest
@@ -79,3 +80,77 @@ def test_env_file_configures_model_and_price(tmp_path, monkeypatch):
     llm, pricing = llm_from_env(tmp_path)
     assert llm.name == "some/model" and pricing.cost(1_000_000, 1_000_000) == 2.5
     assert to_openai_messages("s", [])[0]["role"] == "system"
+
+
+# --- OpenAI / cost optimisation ------------------------------------------------------------------
+LLM_ENV = ("REPOPILOT_LLM_API_KEY", "OPENAI_API_KEY", "GROQ_API_KEY", "REPOPILOT_LLM_MODEL", "REPOPILOT_LLM_BASE_URL",
+           "REPOPILOT_LLM_PRICE_IN", "REPOPILOT_LLM_PRICE_OUT", "REPOPILOT_LLM_PRICE_CACHED",
+           "REPOPILOT_LLM_REASONING_EFFORT", "REPOPILOT_LLM_SERVICE_TIER", "REPOPILOT_LLM_TEMPERATURE",
+           "REPOPILOT_LLM_MAX_OUTPUT_TOKENS")
+
+
+@pytest.fixture
+def clean_env(monkeypatch):
+    for var in LLM_ENV:
+        monkeypatch.delenv(var, raising=False)
+    yield
+    for var in LLM_ENV:  # load_dotenv writes os.environ directly: never leak a fake key into later tests
+        os.environ.pop(var, None)
+
+
+def test_openai_key_selects_cheap_reasoning_defaults(tmp_path, clean_env):
+    (tmp_path / ".env").write_text("OPENAI_API_KEY=sk-test\n")
+    llm, pricing = llm_from_env(tmp_path)
+    assert llm.name == "gpt-5-mini" and str(llm.client.base_url).startswith("https://api.openai.com/v1")
+    assert llm.temperature is None and llm.reasoning_effort == "low" and llm.service_tier is None
+    assert llm.prompt_cache_key == "repopilot-v1"
+    assert (pricing.input_per_mtok, pricing.cached_input_per_mtok, pricing.output_per_mtok) == (0.25, 0.025, 2.00)
+
+
+def test_flex_tier_halves_the_price_and_is_dropped_where_unsupported(tmp_path, clean_env):
+    (tmp_path / ".env").write_text("OPENAI_API_KEY=sk-test\nREPOPILOT_LLM_SERVICE_TIER=flex\n")
+    llm, pricing = llm_from_env(tmp_path)
+    assert llm.service_tier == "flex" and pricing.output_per_mtok == 1.00
+    for var in LLM_ENV:
+        os.environ.pop(var, None)
+    (tmp_path / ".env").write_text("OPENAI_API_KEY=sk-test\nREPOPILOT_LLM_SERVICE_TIER=flex\n"
+                                   "REPOPILOT_LLM_MODEL=gpt-4o-mini\n")
+    llm, pricing = llm_from_env(tmp_path)
+    assert llm.service_tier is None and llm.temperature == 0.0 and pricing.output_per_mtok == 0.60
+
+
+def test_reasoning_request_shape():
+    seen = {}
+
+    def handler(request):
+        seen.update(json.loads(request.content))
+        return reply({"content": "ok"}, usage={"prompt_tokens": 2000, "completion_tokens": 300,
+                                               "prompt_tokens_details": {"cached_tokens": 1536},
+                                               "completion_tokens_details": {"reasoning_tokens": 256}})
+
+    r = make(handler, temperature=None, reasoning_effort="low", service_tier="flex",
+             prompt_cache_key="k").complete("s", [], TOOLS)
+    assert "temperature" not in seen and "max_tokens" not in seen and seen["max_completion_tokens"] == 2048
+    assert (seen["reasoning_effort"], seen["service_tier"], seen["prompt_cache_key"]) == ("low", "flex", "k")
+    assert (r.cached_input_tokens, r.reasoning_tokens) == (1536, 256)
+
+
+def test_no_credits_fails_fast_without_waiting():
+    waits = []
+    body = {"error": {"message": "You have no credits remaining.", "type": "insufficient_quota"}}
+    llm = OpenAICompatibleLLM("m", "k", "https://llm.invalid/v1", sleep=waits.append,
+                              transport=httpx.MockTransport(lambda req: httpx.Response(429, json=body)))
+    with pytest.raises(LLMError) as err:
+        llm.complete("s", [], TOOLS)
+    assert err.value.retryable is False and waits == []
+
+
+def test_loop_does_not_retry_a_non_retryable_error(executor):
+    from agent.llm import ScriptedLLM
+    from agent.loop import Agent
+    from agent.stop_rule import StopReason
+
+    result = Agent(executor, ScriptedLLM([LLMError("no credits", retryable=False)], repeat_last=True),
+                   baseline_tests=False).start("x")
+    assert result.stop_reason == StopReason.LLM_ERROR
+    assert sum(r["type"] == "llm_error" for r in executor.logger.records) == 1

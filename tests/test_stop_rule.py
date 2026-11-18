@@ -81,3 +81,13 @@ def test_repeated_identical_call_is_a_loop():
     assert budget.before_tool(key) == StopReason.LOOP_DETECTED
     assert budget.tool_calls == 2  # the looping call was not counted as executed
     assert budget.before_tool(("read_file", '{"path": "app/main.py"}', 1)) is None  # new repo state
+
+
+def test_cached_input_is_billed_at_the_cached_rate():
+    pricing = Pricing("gpt-5-mini", input_per_mtok=0.25, output_per_mtok=2.00, cached_input_per_mtok=0.025)
+    assert pricing.cost(1_000_000, 0, 1_000_000) == pytest.approx(0.025)
+    assert pricing.cost(1_000_000, 1_000_000, 500_000) == pytest.approx(0.125 + 0.0125 + 2.0)
+    budget = Budget(Limits(), pricing)
+    budget.record_llm(10_000, 1_000, cached_input_tokens=8_000)
+    assert budget.snapshot()["cached_input_tokens"] == 8_000
+    assert budget.cost_usd == pytest.approx((2_000 * 0.25 + 8_000 * 0.025 + 1_000 * 2.0) / 1e6)
