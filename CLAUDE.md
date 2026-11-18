@@ -85,7 +85,10 @@ summary line disappears.
   LangSmith tracing via LANGSMITH_* env vars (off by default, forced off in tests).
 - Tasks come from GitHub issues on the target repo (label `repopilot`, trusted authors), not from
   hand-written bug reports. ScriptedLLM/demo_scripts are test doubles + eval baseline only.
-- Real runs still need: OpenAI credits, GITHUB_TOKEN (to seed issues), LANGSMITH_API_KEY.
+- 2026-11-18: issues #1-#5 (BUG-1..BUG-5, label `repopilot`) created on the target repo by
+  scripts/seed_issues.py (as seifknani, via Git Credential Manager; no GITHUB_TOKEN in .env).
+- 2026-11-18: LangSmith configured in .env (US region, project `repopilot`, tracing on); test trace verified.
+- Real runs still need: OpenAI credits (account had none on 2026-11-18).
 - Team guide (user-facing, outside the repo): ../RepoPilot_Team_Guide.pdf, source ../RepoPilot_Team_Guide.html
   (render with Edge headless --print-to-pdf). Updated 2026-11-18.
 
