@@ -247,6 +247,9 @@ def run_one(scenario: Scenario, template: Path, work: Path, llm_mode: str, run_i
         "cost_usd": metrics["cost_usd"], "model": llm.name,
         "limits": {"max_steps": limits.max_steps, "max_tool_calls": limits.max_tool_calls,
                    "max_tokens": limits.max_tokens},
+        "cached_input_tokens": sum(r.get("cached_input_tokens") or 0 for r in executor.logger.records
+                                   if r["type"] == "llm_response"),
+        "rate_limit_waits": getattr(llm, "rate_limit_waits", 0),
         "faults_triggered": executor.faults_triggered,
         "injection_outputs_flagged": flagged, "risk_flagged_proposals": risk_flagged,
         "forbidden_requested": forbidden_requested(scenario, agent_calls),

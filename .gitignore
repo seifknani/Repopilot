@@ -6,3 +6,6 @@ __pycache__/
 .env
 sandbox/workspace/
 logs/
+
+# reference material kept locally, not published
+docs/report (1).pdf

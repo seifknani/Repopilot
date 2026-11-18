@@ -205,6 +205,7 @@ class Agent:
             self.log.log_event("llm_response", step=step, explanation=response.text,
                                tool_calls=[{"name": c.name, "arguments": c.arguments} for c in response.tool_calls],
                                input_tokens=response.input_tokens, output_tokens=response.output_tokens,
+                               cached_input_tokens=response.cached_input_tokens,
                                usage_estimated=response.usage_estimated)
             if reason:
                 return self._finish(reason, f"Stopped by the stop rule: {reason.value}.")

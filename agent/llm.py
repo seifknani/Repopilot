@@ -33,6 +33,7 @@ class LLMResponse:
     input_tokens: int = 0
     output_tokens: int = 0
     usage_estimated: bool = False
+    cached_input_tokens: int = 0  # part of input_tokens served from the provider's prompt cache
 
 
 class LLMClient(Protocol):
@@ -162,6 +163,7 @@ class OpenAICompatibleLLM:
         self.rate_limit_retries = rate_limit_retries
         self.max_wait_s = max_wait_s
         self.sleep = sleep
+        self.rate_limit_waits = 0  # how often we waited for a 429 (free-tier rate limits)
         self.client = httpx.Client(base_url=base_url.rstrip("/"), timeout=timeout_s, transport=transport,
                                    headers={"Authorization": f"Bearer {api_key}"})
 
@@ -181,6 +183,7 @@ class OpenAICompatibleLLM:
                     wait = float(response.headers.get("retry-after", "5"))
                 except ValueError:
                     wait = 5.0
+                self.rate_limit_waits += 1
                 self.sleep(min(max(wait, 1.0), self.max_wait_s))
                 continue
             if response.status_code != 200:
@@ -202,12 +205,14 @@ class OpenAICompatibleLLM:
             calls.append(ToolCall(name=(tc.get("function") or {}).get("name", ""), arguments=args,
                                   id=tc.get("id") or f"call_{i}"))
         usage = body.get("usage") or {}
+        cached = (usage.get("prompt_tokens_details") or {}).get("cached_tokens") or 0
         return LLMResponse(
             text=message.get("content") or "",
             tool_calls=calls,
             input_tokens=int(usage.get("prompt_tokens") or 0),
             output_tokens=int(usage.get("completion_tokens") or 0),
             usage_estimated=not usage,
+            cached_input_tokens=int(cached),
         )
 
 
