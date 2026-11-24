@@ -333,6 +333,12 @@ groups a whole task into one thread; `metadata.issue` holds the issue number. Th
 
 ### 2.6 Model and cost controls (2026-11-18)
 
+- **Since 2026-11-24 the active model is Gemini `gemini-3.5-flash-lite`** (`GEMINI_API_KEY`, Google's
+  OpenAI-compatible endpoint; OpenAI had no credits). Gemini specifics handled in `agent/llm.py`: tool calls
+  carry a *thought signature* (`extra_content`) that must be sent back on the next turn (else HTTP 400), so
+  `ToolCall.extra` keeps it through the loop's messages; thinking tokens are missing from `completion_tokens`
+  and are added from `total_tokens`; temperature is left at the provider default; 503 "high demand" is
+  waited out like a 429. Prices from ai.google.dev (paid tier; the free tier is $0 within rate limits).
 - Model: OpenAI `gpt-5-mini` via the OpenAI-compatible adapter (`agent/llm.py`): `max_completion_tokens`,
   no temperature for reasoning models, `reasoning_effort=low`, optional `service_tier=flex` (half price),
   fixed `prompt_cache_key`. Usage records cached input and reasoning tokens.

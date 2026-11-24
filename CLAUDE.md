@@ -95,6 +95,10 @@ summary line disappears.
   (render with Edge headless --print-to-pdf). Updated 2026-11-18.
 
 ## Open decisions
+- LLM provider SWITCHED 2026-11-24 to Gemini: GEMINI_API_KEY in .env, REPOPILOT_LLM_MODEL=gemini-3.5-flash-lite
+  (OpenAI and Meta Llama keys both had no credits / billing). The adapter keeps Gemini 3 thought
+  signatures (ToolCall.extra -> extra_content) and counts hidden thinking tokens (total - prompt - completion).
+  First real run 2026-11-24: issue #1, 9 steps, correct edit proposed (also fixed BUG-2), $0.026 at paid prices.
 - LLM provider (decided 2026-11-18): OpenAI `gpt-5-mini`, reasoning_effort=low, key in git-ignored `.env`
   (OPENAI_API_KEY). Team budget is $20 for the semester: per-run cap $0.25, ledger cap $18
   (`agent/spend.py`, logs/spend.jsonl). Estimated ~$0.01 per repair task with prompt caching.

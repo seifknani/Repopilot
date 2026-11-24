@@ -66,13 +66,13 @@ def test_provider_failures_become_llm_errors(response):
 
 
 def test_no_key_means_no_real_llm(tmp_path, monkeypatch):
-    for var in ("REPOPILOT_LLM_API_KEY", "GROQ_API_KEY"):
+    for var in ("REPOPILOT_LLM_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY", "GROQ_API_KEY"):
         monkeypatch.delenv(var, raising=False)
     assert llm_from_env(tmp_path) == (None, None)
 
 
 def test_env_file_configures_model_and_price(tmp_path, monkeypatch):
-    for var in ("REPOPILOT_LLM_API_KEY", "GROQ_API_KEY", "REPOPILOT_LLM_MODEL", "REPOPILOT_LLM_PRICE_IN",
+    for var in ("REPOPILOT_LLM_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY", "GROQ_API_KEY", "REPOPILOT_LLM_MODEL", "REPOPILOT_LLM_PRICE_IN",
                 "REPOPILOT_LLM_PRICE_OUT", "REPOPILOT_LLM_BASE_URL"):
         monkeypatch.delenv(var, raising=False)
     (tmp_path / ".env").write_text("GROQ_API_KEY=abc\nREPOPILOT_LLM_MODEL=some/model\nREPOPILOT_LLM_PRICE_IN=0.5\n"
@@ -83,7 +83,7 @@ def test_env_file_configures_model_and_price(tmp_path, monkeypatch):
 
 
 # --- OpenAI / cost optimisation ------------------------------------------------------------------
-LLM_ENV = ("REPOPILOT_LLM_API_KEY", "OPENAI_API_KEY", "GROQ_API_KEY", "REPOPILOT_LLM_MODEL", "REPOPILOT_LLM_BASE_URL",
+LLM_ENV = ("REPOPILOT_LLM_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY", "GROQ_API_KEY", "REPOPILOT_LLM_MODEL", "REPOPILOT_LLM_BASE_URL",
            "REPOPILOT_LLM_PRICE_IN", "REPOPILOT_LLM_PRICE_OUT", "REPOPILOT_LLM_PRICE_CACHED",
            "REPOPILOT_LLM_REASONING_EFFORT", "REPOPILOT_LLM_SERVICE_TIER", "REPOPILOT_LLM_TEMPERATURE",
            "REPOPILOT_LLM_MAX_OUTPUT_TOKENS")
@@ -163,3 +163,60 @@ def test_no_credits_is_explained_to_the_user(executor):
     err = LLMError('HTTP 429: {"type": "insufficient_quota"}', retryable=False)
     result = Agent(executor, ScriptedLLM([err], repeat_last=True), baseline_tests=False).start("x")
     assert "no credits left" in result.final_message
+
+
+# --- Gemini (OpenAI-compatible endpoint) -------------------------------------------------------
+def test_gemini_key_selects_gemini_defaults_and_wins_over_openai(tmp_path, clean_env):
+    (tmp_path / ".env").write_text("OPENAI_API_KEY=sk-test\nGEMINI_API_KEY=g-test\n")
+    llm, pricing = llm_from_env(tmp_path)
+    assert llm.name == "gemini-3.5-flash-lite"
+    assert str(llm.client.base_url).startswith("https://generativelanguage.googleapis.com/v1beta/openai")
+    assert llm.temperature is None and llm.reasoning_effort == "low"
+    assert llm.service_tier is None and llm.prompt_cache_key is None  # OpenAI-only options are not sent
+    assert (pricing.input_per_mtok, pricing.output_per_mtok) == (0.30, 2.50)
+
+
+def test_gemini_thought_signature_is_sent_back_with_the_tool_call(executor):
+    """Gemini 3 rejects a follow-up request whose tool call lost its thought signature (HTTP 400)."""
+    from agent.loop import Agent
+    from agent.stop_rule import Pricing
+
+    signature = {"google": {"thought_signature": "c2lnbmF0dXJl"}}
+    requests = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        requests.append(body)
+        if len(requests) == 1:
+            return reply({"content": None, "tool_calls": [{"id": "c1", "type": "function", "extra_content": signature,
+                                                           "function": {"name": "git_status", "arguments": "{}"}}]},
+                         usage={"prompt_tokens": 100, "completion_tokens": 10, "total_tokens": 150})
+        sent = [m for m in body["messages"] if m["role"] == "assistant"][0]["tool_calls"][0]
+        if sent.get("extra_content") != signature:
+            return httpx.Response(400, json={"error": {"message": "Function call is missing a thought_signature"}})
+        return reply({"content": "Nothing to fix."}, usage={"prompt_tokens": 200, "completion_tokens": 5})
+
+    result = Agent(executor, make(handler, temperature=None), pricing=Pricing(), baseline_tests=False).start("x")
+    assert result.final_message == "Nothing to fix." and len(requests) == 2
+
+
+def test_gemini_hidden_thinking_tokens_count_as_output():
+    r = make(lambda req: reply({"content": "ok"}, usage={"prompt_tokens": 51, "completion_tokens": 20,
+                                                         "total_tokens": 113})).complete("s", [], TOOLS)
+    assert (r.input_tokens, r.output_tokens, r.reasoning_tokens) == (51, 62, 42)
+
+
+def test_high_demand_503_is_waited_out_then_retried():
+    answers = iter([httpx.Response(503, json={"error": {"status": "UNAVAILABLE"}}), reply({"content": "ok"}, usage={})])
+    waits = []
+    llm = OpenAICompatibleLLM("m", "k", "https://llm.invalid/v1", sleep=waits.append,
+                              transport=httpx.MockTransport(lambda req: next(answers)))
+    assert llm.complete("s", [], TOOLS).text == "ok" and waits == [5.0]
+
+
+def test_invalid_gemini_key_is_not_retried():
+    body = [{"error": {"code": 400, "message": "API key not valid.", "status": "INVALID_ARGUMENT",
+                       "details": [{"reason": "API_KEY_INVALID"}]}}]
+    with pytest.raises(LLMError) as err:
+        make(lambda req: httpx.Response(400, json=body)).complete("s", [], TOOLS)
+    assert err.value.retryable is False

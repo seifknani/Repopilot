@@ -136,7 +136,7 @@ def action_start() -> None:
         return
     llm, pricing = llm_provider.llm_from_env(ROOT)
     if llm is None:
-        flash("error", "No LLM provider configured. Set REPOPILOT_LLM_API_KEY (or GROQ_API_KEY) in .env.")
+        flash("error", "No LLM provider configured. Set GEMINI_API_KEY (or OPENAI_API_KEY) in .env.")
         return
     ledger = ledger_from_env(ROOT)
     if ledger.exhausted():
@@ -386,9 +386,8 @@ with st.sidebar:
         st.caption("No sandbox yet. It is created on the first reset or run.")
 
     st.header("Agent")
-    model = os.environ.get("REPOPILOT_LLM_MODEL", llm_provider.DEFAULT_MODEL)
-    has_key = bool(os.environ.get("REPOPILOT_LLM_API_KEY") or os.environ.get("GROQ_API_KEY"))
-    st.caption(f"LLM: **{model}**" if has_key else "LLM: **not configured** (set an API key in .env)")
+    configured, _ = llm_provider.llm_from_env(ROOT)
+    st.caption(f"LLM: **{configured.name}**" if configured else "LLM: **not configured** (set an API key in .env)")
     st.caption("Loop: **LangGraph** (plan → tools → human_review → apply_write)")
     st.caption(f"LangSmith tracing: **on**, project `{tracing.tracing_project()}`" if tracing.tracing_enabled()
                else "LangSmith tracing: off (LANGSMITH_TRACING=true + LANGSMITH_API_KEY to enable)")

@@ -260,7 +260,8 @@ class Agent:
         reason = self.budget.record_llm(response.input_tokens, response.output_tokens, response.cached_input_tokens)
         messages = state["messages"] + [{
             "role": "assistant", "content": response.text,
-            "tool_calls": [{"id": c.id, "name": c.name, "arguments": c.arguments} for c in response.tool_calls],
+            "tool_calls": [{"id": c.id, "name": c.name, "arguments": c.arguments,
+                            **({"extra": c.extra} if c.extra else {})} for c in response.tool_calls],
         }]
         self.log.log_event("llm_response", step=step, explanation=response.text,
                            tool_calls=[{"name": c.name, "arguments": c.arguments} for c in response.tool_calls],

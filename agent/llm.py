@@ -5,7 +5,7 @@ translate the neutral message format below to and from its own API, and report t
 
 Neutral message format:
   {"role": "user", "content": str}
-  {"role": "assistant", "content": str, "tool_calls": [{"id", "name", "arguments"}]}
+  {"role": "assistant", "content": str, "tool_calls": [{"id", "name", "arguments", "extra"?}]}
   {"role": "tool", "tool_call_id": str, "name": str, "content": str}
 """
 from __future__ import annotations
@@ -23,7 +23,7 @@ class LLMError(Exception):
         self.retryable = retryable  # False: retrying cannot help (no credits, bad key) - stop at once
 
 
-NON_RETRYABLE_CODES = ("insufficient_quota", "invalid_api_key", "billing_hard_limit_reached")
+NON_RETRYABLE_CODES = ("insufficient_quota", "invalid_api_key", "billing_hard_limit_reached", "API_KEY_INVALID")
 
 
 @dataclass
@@ -31,6 +31,10 @@ class ToolCall:
     name: str
     arguments: Any = field(default_factory=dict)
     id: str = ""
+    # Provider data that must be sent back unchanged with this call on the next turn. Gemini 3 puts
+    # its "thought signature" here (extra_content.google.thought_signature) and rejects a follow-up
+    # request that drops it (HTTP 400).
+    extra: Optional[dict] = None
 
 
 @dataclass
@@ -131,6 +135,8 @@ DEFAULT_BASE_URL = "https://api.groq.com/openai/v1"
 DEFAULT_MODEL = "openai/gpt-oss-120b"
 OPENAI_BASE_URL = "https://api.openai.com/v1"
 OPENAI_DEFAULT_MODEL = "gpt-5-mini"
+GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
+GEMINI_DEFAULT_MODEL = "gemini-3.5-flash-lite"
 
 # USD per million tokens: (input, cached input, output), standard tier.
 # Source: https://developers.openai.com/api/docs/pricing (checked 2026-11-18).
@@ -143,6 +149,11 @@ MODEL_PRICES: dict[str, tuple[float, float, float]] = {
     "gpt-5.6-luna": (0.20, 0.02, 1.20),
     "gpt-4.1-mini": (0.40, 0.10, 1.60),
     "gpt-4o-mini": (0.15, 0.075, 0.60),
+    # Gemini, paid tier (free tier: $0 within its rate limits). Source: https://ai.google.dev/gemini-api/docs/pricing
+    # (checked 2026-11-24). Cached input set to the full input price (conservative: implicit caching is not
+    # reported reliably through the OpenAI-compatible endpoint).
+    "gemini-3.5-flash-lite": (0.30, 0.30, 2.50),
+    "gemini-3.6-flash": (1.50, 1.50, 7.50),
 }
 FLEX_MODELS = frozenset({"gpt-5-nano", "gpt-5-mini", "gpt-5.4-mini", "gpt-5.6-luna"})
 
@@ -164,7 +175,8 @@ def to_openai_messages(system: str, messages: list[dict]) -> list[dict]:
             if m.get("tool_calls"):
                 msg["tool_calls"] = [
                     {"id": c["id"], "type": "function",
-                     "function": {"name": c["name"], "arguments": json.dumps(c["arguments"], default=str)}}
+                     "function": {"name": c["name"], "arguments": json.dumps(c["arguments"], default=str)},
+                     **({"extra_content": c["extra"]} if c.get("extra") else {})}
                     for c in m["tool_calls"]
                 ]
             out.append(msg)
@@ -226,8 +238,11 @@ class OpenAICompatibleLLM:
                 # No credits / spending limit / bad key: waiting will not help, and retries cost time.
                 raise LLMError(f"LLM provider refused the request (HTTP {response.status_code}, account problem): "
                                f"{response.text[:300]}", retryable=False)
-            if response.status_code == 429 and attempt < self.rate_limit_retries:
-                # Free tiers limit tokens per minute: wait as instructed, then retry the same request.
+            if response.status_code in (400, 401, 403) and "API_KEY_INVALID" in response.text:
+                raise LLMError("LLM provider rejected the API key.", retryable=False)
+            if response.status_code in (429, 500, 502, 503) and attempt < self.rate_limit_retries:
+                # Free tiers limit tokens per minute (429); Gemini answers 503 "high demand" at peaks:
+                # wait as instructed, then retry the same request.
                 try:
                     wait = float(response.headers.get("retry-after", "5"))
                 except ValueError:
@@ -252,15 +267,23 @@ class OpenAICompatibleLLM:
             except json.JSONDecodeError:
                 args = raw  # the executor answers "Arguments ... must be a JSON object"
             calls.append(ToolCall(name=(tc.get("function") or {}).get("name", ""), arguments=args,
-                                  id=tc.get("id") or f"call_{i}"))
+                                  id=tc.get("id") or f"call_{i}", extra=tc.get("extra_content") or None))
         usage = body.get("usage") or {}
+        prompt_tokens = int(usage.get("prompt_tokens") or 0)
+        output_tokens = int(usage.get("completion_tokens") or 0)
         cached = (usage.get("prompt_tokens_details") or {}).get("cached_tokens") or 0
         reasoning = (usage.get("completion_tokens_details") or {}).get("reasoning_tokens") or 0
+        # Gemini leaves its thinking tokens out of completion_tokens (they only appear in total_tokens),
+        # but bills them as output: count them, so the cost and the stop rule see the real usage.
+        hidden = int(usage.get("total_tokens") or 0) - prompt_tokens - output_tokens
+        if hidden > 0:
+            output_tokens += hidden
+            reasoning += hidden
         return LLMResponse(
             text=message.get("content") or "",
             tool_calls=calls,
-            input_tokens=int(usage.get("prompt_tokens") or 0),
-            output_tokens=int(usage.get("completion_tokens") or 0),
+            input_tokens=prompt_tokens,
+            output_tokens=output_tokens,
             usage_estimated=not usage,
             cached_input_tokens=int(cached),
             reasoning_tokens=int(reasoning),
@@ -301,7 +324,8 @@ def pricing_for(model: str, service_tier: Optional[str] = None):
 def llm_from_env(project_root: Optional[Path] = None):
     """Build the real LLM and its Pricing from environment variables (or a git-ignored .env).
 
-    Key: REPOPILOT_LLM_API_KEY, else OPENAI_API_KEY (OpenAI defaults), else GROQ_API_KEY (Groq defaults).
+    Key: REPOPILOT_LLM_API_KEY, else GEMINI_API_KEY (Gemini defaults), else OPENAI_API_KEY (OpenAI
+    defaults), else GROQ_API_KEY (Groq defaults).
     Optional: REPOPILOT_LLM_MODEL, REPOPILOT_LLM_BASE_URL, REPOPILOT_LLM_REASONING_EFFORT (default "low"
     for reasoning models on OpenAI), REPOPILOT_LLM_SERVICE_TIER ("flex" = half price on OpenAI),
     REPOPILOT_LLM_MAX_OUTPUT_TOKENS (default 2048), REPOPILOT_LLM_TEMPERATURE,
@@ -313,6 +337,8 @@ def llm_from_env(project_root: Optional[Path] = None):
     env = os.environ
     if env.get("REPOPILOT_LLM_API_KEY"):
         key, base, model = env["REPOPILOT_LLM_API_KEY"], DEFAULT_BASE_URL, DEFAULT_MODEL
+    elif env.get("GEMINI_API_KEY"):
+        key, base, model = env["GEMINI_API_KEY"], GEMINI_BASE_URL, GEMINI_DEFAULT_MODEL
     elif env.get("OPENAI_API_KEY"):
         key, base, model = env["OPENAI_API_KEY"], OPENAI_BASE_URL, OPENAI_DEFAULT_MODEL
     elif env.get("GROQ_API_KEY"):
@@ -322,10 +348,12 @@ def llm_from_env(project_root: Optional[Path] = None):
     model = env.get("REPOPILOT_LLM_MODEL") or model
     base = env.get("REPOPILOT_LLM_BASE_URL") or base
     is_openai = "api.openai.com" in base
+    is_gemini = "generativelanguage.googleapis.com" in base
     reasoning = is_reasoning_model(model)
     temperature_env = env.get("REPOPILOT_LLM_TEMPERATURE")
-    temperature = float(temperature_env) if temperature_env else (None if reasoning else 0.0)
-    effort = env.get("REPOPILOT_LLM_REASONING_EFFORT") or ("low" if reasoning and is_openai else None)
+    # Gemini 3 models are tuned for their default temperature (Google advises against lowering it).
+    temperature = float(temperature_env) if temperature_env else (None if reasoning or is_gemini else 0.0)
+    effort = env.get("REPOPILOT_LLM_REASONING_EFFORT") or ("low" if (reasoning and is_openai) or is_gemini else None)
     tier = (env.get("REPOPILOT_LLM_SERVICE_TIER") or None) if is_openai else None
     if tier == "flex" and model.split("/")[-1] not in FLEX_MODELS:
         tier = None  # flex is not offered for this model: use the standard tier
