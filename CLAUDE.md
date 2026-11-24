@@ -92,7 +92,7 @@ summary line disappears.
   agent; approvals stay manual; status labels repopilot:in-progress/done/failed need GITHUB_TOKEN.
 - Real runs still need: OpenAI credits (account had none on 2026-11-18).
 - Team guide (user-facing, outside the repo): ../RepoPilot_Team_Guide.pdf, source ../RepoPilot_Team_Guide.html
-  (render with Edge headless --print-to-pdf). Updated 2026-11-18.
+  (render with Edge headless --print-to-pdf). Updated 2026-11-24 (Gemini, measured first run, watch mode).
 
 ## Open decisions
 - LLM provider SWITCHED 2026-11-24 to Gemini: GEMINI_API_KEY in .env, REPOPILOT_LLM_MODEL=gemini-3.5-flash-lite
