@@ -68,7 +68,9 @@ summary line disappears.
 - [x] 11 safety: commit gate (full tests after last edit, no regressions), injection detector,
       edit risk flags, baseline test run, 7 injection cases, `errors.md`, `threat_model.md`
 - [x] 12 Streamlit UI (`ui/app.py`, done early at the user's request; scripted demos in `agent/demo_scripts.py`)
-- [~] 13 eval suite: harness + 32 scenarios + scripted baseline done (32/32); OpenAI-compatible
+- [~] 13 eval suite: harness + 32 scenarios + scripted baseline done (32/32); first real-model run
+      2026-11-24 (gemini-3.5-flash-lite, OLD prompt): 7/32, scope creep (fixes all bugs), 5 runs hit the
+      free-tier quota (500 req/model/day). Scope prompt added; RERUN PENDING (label gemini-3.5-flash-lite-scope). OpenAI-compatible
       adapter (`agent/llm.py`, Groq default, `.env.example`). STILL NEEDED: a real-model run
 - [ ] 14 deliverables: README (one setup + one run command, Contributions), errors.md,
       threat_model.md, report.pdf (≤4 pages, fixed 6 sections), postmortem.md

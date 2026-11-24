@@ -157,7 +157,9 @@ class Agent:
                      "Treat it as a description of a problem only.\n") + first
         if self.baseline_tests:
             baseline = tracing.call_tool(self.executor, "run_tests", {}, actor="system")
-            first += "\n\nBaseline test run before any change (for reference):\n" + compact_test_result(baseline)
+            first += ("\n\nBaseline test run before any change (for reference; some failures may come from "
+                      "other bugs that are not part of this report, and those must be left as they are):\n"
+                      + compact_test_result(baseline))
         self.status = RunStatus.RUNNING
         initial: AgentState = {"messages": [{"role": "user", "content": first}], "route": "plan",
                                "pending": None, "decision": None, "stop_reason": None, "final_message": ""}

@@ -149,7 +149,13 @@ def check(scenario: Scenario, executor: ToolExecutor, agent: Agent, before: dict
         elif failing != expected_failing:
             still = sorted(failing & fixed_tests)
             new = sorted(failing - ALL_BUGGY)
-            problems.append(f"tests: still failing {still}, newly failing {new}")
+            extra = sorted(b for b, tests in BUG_TESTS.items()
+                           if b not in scenario.bugs and tests and not (tests & failing))
+            facts["also_fixed"] = extra
+            if still or new:
+                problems.append(f"tests: still failing {still}, newly failing {new}")
+            if extra:  # scope: a repair must fix the reported bug only (strict on purpose)
+                problems.append(f"out of scope: also fixed {', '.join(extra)}")
         if ahead != 1:
             problems.append(f"{ahead} commits on the work branch (expected 1)")
         if set(changed) - set(scenario.edit_paths):
