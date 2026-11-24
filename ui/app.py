@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -28,7 +29,9 @@ from agent.executor import ToolExecutor  # noqa: E402
 from agent.gitutil import run_git  # noqa: E402
 from agent.loop import Agent, RunStatus  # noqa: E402
 from agent.policy import Policy  # noqa: E402
-from agent.stop_rule import Limits  # noqa: E402
+from agent.spend import ledger_from_env  # noqa: E402
+from agent.stop_rule import Limits, StopReason  # noqa: E402
+from agent.watcher import IssueWatcher  # noqa: E402
 from sandbox.reset import REMOTE_ENV, ResetError, reset_workspace  # noqa: E402
 
 WORKSPACE = Path(os.environ.get("REPOPILOT_WORKSPACE", DEFAULT_WORKSPACE))
@@ -41,8 +44,12 @@ llm_provider.load_dotenv(ROOT / ".env")  # LLM key, GITHUB_TOKEN, LangSmith sett
 st.set_page_config(page_title="RepoPilot", layout="wide")
 state = st.session_state
 state.setdefault("agent", None)
-state.setdefault("flash", None)
+state.setdefault("flash", [])  # (kind, message) shown once on the next rerun
 state.setdefault("issues", [])  # trusted task issues loaded from the target repo
+state.setdefault("watcher", None)  # IssueWatcher while watch mode is on
+state.setdefault("auto_pending", None)  # issue found by the watcher, started on the next full rerun
+state.setdefault("auto_issue", None)  # number of the issue the current automatic run works on
+state.setdefault("watch_status", "")
 
 
 # --- helpers ---------------------------------------------------------------------------
@@ -62,7 +69,7 @@ def has_remote() -> bool:
 
 
 def flash(kind: str, message: str) -> None:
-    state.flash = (kind, message)
+    state.flash = [*state.flash, (kind, message)]
 
 
 def records() -> list[dict]:
@@ -131,14 +138,19 @@ def action_start() -> None:
     if llm is None:
         flash("error", "No LLM provider configured. Set REPOPILOT_LLM_API_KEY (or GROQ_API_KEY) in .env.")
         return
+    ledger = ledger_from_env(ROOT)
+    if ledger.exhausted():
+        flash("error", f"The team LLM budget is used up: {ledger.summary()}.")
+        return
     if not workspace_ready():
         action_reset()
-    limits = Limits(max_steps=int(state.get("max_steps", 20)), max_tool_calls=int(state.get("max_tool_calls", 40)))
+    limits = Limits(max_steps=int(state.get("max_steps", 20)), max_tool_calls=int(state.get("max_tool_calls", 40)),
+                    max_cost_usd=float(state.get("max_cost", 0.25)))
     tag = f"issue-{issue.number}" if issue else "custom"
     log_path = LOG_DIR / f"run-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{tag}.jsonl"
     executor = ToolExecutor(AgentConfig(workspace=WORKSPACE, log_path=log_path))
     metadata = {"issue": issue.number, "issue_url": issue.url} if issue else {"source": "custom"}
-    agent = Agent(executor, llm, limits, pricing, run_metadata=metadata)
+    agent = Agent(executor, llm, limits, pricing, run_metadata=metadata, ledger=ledger)
     state.agent = agent
     agent.start(report, issue_number=issue.number if issue else None)
 
@@ -156,6 +168,106 @@ def action_comment_issue(number: int, pushed: dict) -> None:
         flash("error", f"Could not comment: {exc}")
         return
     flash("success", f"Commented on issue #{number}: {url}")
+
+
+# --- watch mode (automatic start) ------------------------------------------------------
+def target_repo() -> str:
+    return (state.get("issues_repo") or os.environ.get(REMOTE_ENV, "")).strip()
+
+
+def get_watcher() -> IssueWatcher:
+    repo = gh.parse_repo(target_repo())
+    if state.watcher is None or state.watcher.client.repo != repo:
+        state.watcher = IssueWatcher(gh.GitHubIssues(repo, gh.token_from_env()))
+    return state.watcher
+
+
+def run_in_progress() -> bool:
+    return state.agent is not None and state.agent.status in (RunStatus.RUNNING, RunStatus.AWAITING_APPROVAL)
+
+
+def watch_poll() -> bool:
+    """One check of the target repo. Claims the next new task issue and returns True if it found one."""
+    now = datetime.now().strftime("%H:%M:%S")
+    state.last_poll = time.monotonic()
+    if run_in_progress() or state.auto_pending is not None:
+        state.watch_status = f"{now}: a run is in progress; the next issue waits for it."
+        return False
+    llm, _ = llm_provider.llm_from_env(ROOT)
+    if llm is None:
+        state.watch_status = f"{now}: no LLM provider configured, so no run is started."
+        return False
+    if ledger_from_env(ROOT).exhausted():
+        state.watch_status = f"{now}: the team LLM budget is used up, so no run is started."
+        return False
+    try:
+        watcher = get_watcher()
+        issue = watcher.next_issue()
+        if issue is None:
+            state.watch_status = f"{now}: no new task issue on {watcher.client.repo}."
+            return False
+        watcher.claim(issue)
+    except gh.GitHubError as exc:
+        state.watch_status = f"{now}: GitHub check failed: {exc}"
+        return False
+    state.auto_pending = issue
+    state.watch_status = f"{now}: new issue #{issue.number} found, starting the agent."
+    return True
+
+
+def start_pending_issue() -> None:
+    """Runs at the top of a full rerun, before the widgets exist (so their values may still be set)."""
+    issue: gh.Issue = state.auto_pending
+    state.auto_pending = None
+    state.issues = sorted({i.number: i for i in [*state.issues, issue]}.values(), key=lambda i: i.number)
+    state.source = ISSUES
+    state.issue = issue.number
+    state.report = issue.as_bug_report()
+    action_reset()  # every automatic run starts from a fresh sandbox
+    action_start()
+    if state.agent is None:  # could not start (provider or budget): give the issue back as failed
+        finish_auto_issue(issue.number, succeeded=False)
+        return
+    state.auto_issue = issue.number
+    flash("info", f"Watch mode started the agent on issue #{issue.number}: {issue.title}")
+
+
+def finish_auto_issue(number: int, succeeded: bool) -> None:
+    try:
+        label = state.watcher.finish(number, succeeded)
+    except gh.GitHubError as exc:
+        state.watch_status = f"Issue #{number} finished, but its label could not be updated: {exc}"
+        return
+    where = f"labelled `{label}`" if state.watcher.can_label else "remembered until the app restarts"
+    state.watch_status = f"Issue #{number} finished ({where})."
+
+
+def check_auto_run_finished() -> None:
+    agent = state.agent
+    if state.auto_issue is None or agent is None or run_in_progress():
+        return
+    number, state.auto_issue = state.auto_issue, None
+    finish_auto_issue(number, succeeded=agent.stop_reason == StopReason.DONE)
+
+
+def action_watch_check() -> None:
+    watch_poll()
+
+
+def on_watch_toggle() -> None:
+    if not state.get("watch"):
+        state.watch_status = ""
+        return
+    try:
+        watcher = get_watcher()
+    except gh.GitHubError as exc:
+        state.watch = False
+        flash("error", f"Watch mode needs the target repo: {exc}")
+        return
+    if not watcher.can_label:
+        flash("warning", "No GITHUB_TOKEN: watch mode cannot label issues on GitHub, so handled issues are "
+                         "only remembered until the app restarts, and GitHub is checked every "
+                         f"{watcher.poll_seconds} s (unauthenticated rate limit).")
 
 
 def action_decide(approve: bool) -> None:
@@ -241,7 +353,23 @@ def process_dot(agent: Agent | None) -> str:
     return "\n".join(lines)
 
 
+# --- automatic start: handled before any widget is drawn -------------------------------
+check_auto_run_finished()
+if state.auto_pending is not None:
+    start_pending_issue()
+
+
 # --- sidebar ---------------------------------------------------------------------------
+def watch_panel() -> None:
+    """Re-run on a timer by Streamlit while watch mode is on (st.fragment run_every)."""
+    interval = state.watcher.poll_seconds if state.watcher else 30
+    due = time.monotonic() - state.get("last_poll", 0.0) >= interval - 1  # not on every click (rate limit)
+    if state.get("watch") and due and watch_poll():
+        st.rerun(scope="app")  # full rerun: start_pending_issue() starts the agent
+    if state.watch_status:
+        st.caption(state.watch_status)
+
+
 with st.sidebar:
     st.header("Sandbox")
     st.radio("Target repository", ["Local copy", "GitHub remote"], key="mode",
@@ -266,16 +394,33 @@ with st.sidebar:
                else "LangSmith tracing: off (LANGSMITH_TRACING=true + LANGSMITH_API_KEY to enable)")
     st.number_input("Max steps", 1, 50, 20, key="max_steps")
     st.number_input("Max tool calls", 1, 100, 40, key="max_tool_calls")
+    st.number_input("Max cost per run (USD)", 0.01, 2.0,
+                    float(os.environ.get("REPOPILOT_MAX_COST_PER_RUN") or 0.25), 0.05, key="max_cost")
+    st.caption(f"Team LLM budget: {ledger_from_env(ROOT).summary()}")
+
+    st.header("Automation")
+    st.toggle("Watch for new issues", key="watch", on_change=on_watch_toggle,
+              help="Checks the target repo's task issues on a timer and starts the agent on the oldest new one. "
+                   "Every edit, commit and push still waits for your approval here.")
+    watching = bool(state.get("watch"))
+    if watching:
+        interval = state.watcher.poll_seconds if state.watcher else 30
+        st.caption(f"Checking every {interval} s · one issue at a time · "
+                   + ("progress labels on GitHub" if state.watcher and state.watcher.can_label
+                      else "no GITHUB_TOKEN: no labels"))
+        st.button("Check now", key="watch_check", on_click=action_watch_check, width="stretch")
+        st.fragment(run_every=interval)(watch_panel)()
+    elif state.watch_status:
+        st.caption(state.watch_status)
 
 
 # --- header & controls -----------------------------------------------------------------
 st.title("RepoPilot")
 st.caption("Autonomous repository maintenance agent · plan → tool call → observe → decide → stop")
 
-if state.flash:
-    kind, message = state.flash
+for kind, message in state.flash:
     getattr(st, kind)(message)
-    state.flash = None
+state.flash = []
 
 agent: Agent | None = state.agent
 running = agent is not None and agent.status == RunStatus.AWAITING_APPROVAL
@@ -313,7 +458,7 @@ if agent:
     cols[1].metric("Steps", f"{m['steps']}/{agent.limits.max_steps}")
     cols[2].metric("Tool calls", f"{m['tool_calls']}/{agent.limits.max_tool_calls}")
     cols[3].metric("Failed calls", m["failed_tool_calls"])
-    cols[4].metric("Tokens (est.)", f"{m['tokens']:,}")
+    cols[4].metric("Tokens (cached)", f"{m['tokens']:,} ({m['cached_input_tokens']:,})")
     cols[5].metric("Cost", f"${m['cost_usd']:.4f}")
     cols[6].metric("Agent time", f"{m['elapsed_s']:.1f}s")
 

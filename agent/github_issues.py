@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 import re
+from urllib.parse import quote
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -143,6 +144,17 @@ class GitHubIssues:
     def create_issue(self, title: str, body: str, labels: tuple[str, ...] = (TASK_LABEL,)) -> Issue:
         return Issue.from_api(self._request("POST", "/issues", json={"title": title, "body": body,
                                                                        "labels": list(labels)}))
+
+    def add_labels(self, number: int, labels: tuple[str, ...]) -> None:
+        self._request("POST", f"/issues/{int(number)}/labels", json={"labels": list(labels)})
+
+    def remove_label(self, number: int, label: str) -> None:
+        """Remove a label from an issue; a label that is not there is not an error."""
+        try:
+            self._request("DELETE", f"/issues/{int(number)}/labels/{quote(label, safe='')}")
+        except GitHubError as exc:
+            if "HTTP 404" not in str(exc):
+                raise
 
     def comment(self, number: int, body: str) -> str:
         raw = self._request("POST", f"/issues/{int(number)}/comments", json={"body": body})

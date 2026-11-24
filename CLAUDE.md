@@ -26,7 +26,7 @@ maintenance agent that investigates and fixes real bugs in our own Task Manageme
 - `sandbox/reset.py` – copies `task_api/` → `sandbox/workspace/` (git-ignored), runs `git init`,
   makes a baseline commit on `main`, and checks out the work branch `repopilot/work`
 - `agent/` – tools, schemas, policy, approvals, executor, logging, stop_rule, llm, loop (LangGraph graph),
-  tracing (LangSmith), github_issues (issues = tasks)
+  tracing (LangSmith), github_issues (issues = tasks), watcher (UI watch mode: auto-start on new issues)
 - `scripts/` – `seed_issues.py` (open `issues.json` as GitHub issues), `run_issue.py` (agent on an issue, real LLM)
 - `tests/` – tests for the agent and the sandbox (root `pytest.ini`, 268 tests, all must pass; ~9 min)
 - `ui/app.py` – Streamlit UI: process diagram, timeline, approvals, tests, git, repo browser, raw log
@@ -88,6 +88,8 @@ summary line disappears.
 - 2026-11-18: issues #1-#5 (BUG-1..BUG-5, label `repopilot`) created on the target repo by
   scripts/seed_issues.py (as seifknani, via Git Credential Manager; no GITHUB_TOKEN in .env).
 - 2026-11-18: LangSmith configured in .env (US region, project `repopilot`, tracing on); test trace verified.
+- 2026-11-18: UI watch mode (user chose option A): sidebar toggle polls issues and auto-starts the
+  agent; approvals stay manual; status labels repopilot:in-progress/done/failed need GITHUB_TOKEN.
 - Real runs still need: OpenAI credits (account had none on 2026-11-18).
 - Team guide (user-facing, outside the repo): ../RepoPilot_Team_Guide.pdf, source ../RepoPilot_Team_Guide.html
   (render with Edge headless --print-to-pdf). Updated 2026-11-18.

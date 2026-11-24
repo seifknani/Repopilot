@@ -319,6 +319,14 @@ groups a whole task into one thread; `metadata.issue` holds the issue number. Th
   (cloned from the target repo, or `--local`), runs the LangGraph agent with the real LLM from `.env`,
   asks for each approval in the terminal, and after a pushed fix offers to comment on the issue.
 - The UI's task source is a GitHub issue (Load issues) or a custom report, always with the real LLM.
+- **Watch mode** (`agent/watcher.py`, UI sidebar "Watch for new issues"): automates the *start* only.
+  A Streamlit fragment polls the trusted task issues (every 30 s with `GITHUB_TOKEN`, 90 s without, to
+  stay under GitHub's 60 unauthenticated calls/hour), claims the oldest unhandled one, rebuilds the
+  sandbox and starts the agent; the run then pauses at the first proposal as usual. One run at a time.
+  Handled issues are labelled on GitHub (`repopilot:in-progress`, then `repopilot:done` if the stop
+  reason is `done`, else `repopilot:failed`), so a restart never repeats work; without a token they are
+  remembered in memory only. It runs inside the UI because paused runs live in memory (InMemorySaver)
+  and the approval panel must be reachable.
 - Trust gate: label `repopilot` + author `OWNER`/`MEMBER`/`COLLABORATOR` (see `threat_model.md`).
 - `ScriptedLLM` and `agent/demo_scripts.py` remain only as deterministic test doubles and as the
   eval's scripted baseline. They are not reachable from the UI or the issue runner.

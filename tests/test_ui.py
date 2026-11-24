@@ -151,3 +151,55 @@ def test_injection_warnings_are_shown_to_the_reviewer(app, workspace):
     warnings = " ".join(w.value for w in app.warning)
     assert "looked like instructions to the agent" in warnings
     assert "override_instructions" in warnings and "auto_approve" in warnings
+
+
+# --- watch mode: automatic start on a new issue ------------------------------------------------
+def watch(at):
+    at.toggle(key="watch").set_value(True).run()
+    assert not at.exception, at.exception
+
+
+def captions(at):
+    return " ".join(c.value for c in at.sidebar.caption)
+
+
+def test_watch_mode_starts_the_agent_on_the_oldest_new_issue(app, workspace, monkeypatch):
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("REPOPILOT_GITHUB_TOKEN", raising=False)
+    watch(app)  # turning it on checks GitHub right away
+    assert any("No GITHUB_TOKEN" in w.value for w in app.warning)
+    assert any("Watch mode started the agent on issue #1" in i.value for i in app.info)
+    assert app.selectbox(key="issue").value == 1
+    assert "approve this edit" in app.subheader[-1].value  # still waits for the human
+    assert "status != ?" in (workspace / "app/database.py").read_text()
+
+    click(app, "watch_check")  # one issue at a time: nothing new starts during a run
+    assert "a run is in progress" in captions(app)
+
+    click(app, "approve")
+    click(app, "approve")
+    assert any("Run finished: **done**" in s.value for s in app.success)
+    assert "Issue #1 finished (remembered until the app restarts)" in captions(app)
+
+    click(app, "watch_check")  # the next issue, never #1 again
+    assert any("issue #3" in i.value for i in app.info)
+
+
+def test_watch_mode_labels_the_issue_on_github(app, monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+    calls = []
+    monkeypatch.setattr(gh.GitHubIssues, "ensure_label", lambda self, name, color, description: False)
+    monkeypatch.setattr(gh.GitHubIssues, "add_labels", lambda self, n, labels: calls.append(("add", n, *labels)))
+    monkeypatch.setattr(gh.GitHubIssues, "remove_label", lambda self, n, label: calls.append(("remove", n, label)))
+    watch(app)
+    assert calls == [("add", 1, "repopilot:in-progress")]
+    click(app, "stop")
+    assert calls[1:] == [("remove", 1, "repopilot:in-progress"), ("add", 1, "repopilot:failed")]
+    assert "labelled `repopilot:failed`" in captions(app)
+
+
+def test_watch_mode_does_not_start_without_an_llm(app, fake_llm):
+    fake_llm["script"] = None
+    watch(app)
+    assert "no LLM provider configured" in captions(app)
+    assert not app.subheader or "approve" not in app.subheader[-1].value
